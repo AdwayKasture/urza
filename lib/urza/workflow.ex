@@ -1,12 +1,10 @@
 defmodule Urza.Workflow do
-  alias Urza.Tools.HumanCheckpoint
-  alias Urza.Tools.Wait
+  alias Urza.Tools.{HumanCheckpoint,Calculator,Echo,Wait}
   alias Urza.Workflow
-  alias Urza.Tools.Calculator
-  alias Urza.Tools.Echo
   alias Oban.Job
   alias Phoenix.PubSub
   use GenServer
+  alias Registry
 
   @heartbeat_interval 1000
 
@@ -14,10 +12,18 @@ defmodule Urza.Workflow do
             work: [],
             acc: %{},
             executing_jobs: %{},
+            executing_agents: %{},
             completed_refs: MapSet.new()
 
-  def start_link(opts) do
-    GenServer.start_link(Workflow, opts)
+  def start_link({id,work,acc}) do
+    # Use the :via tuple to register the process using the Registry
+    name = {:via, Registry, {Urza.WorkflowRegistry, id}}
+  
+    GenServer.start_link(Workflow,%{id: id,work: work,acc: acc}, name: name)
+  end
+
+  def add_job(workflow_id, job_def) do
+    GenServer.cast({:via, Registry, {Urza.WorkflowRegistry, workflow_id}}, {:add_job, job_def})
   end
 
   @impl GenServer
@@ -28,7 +34,24 @@ defmodule Urza.Workflow do
 
     PubSub.subscribe(Urza.PubSub, id)
     send(self(), :start)
-    {:ok, %Workflow{id: id, work: work, acc: initial_acc, executing_jobs: %{}, completed_refs: MapSet.new()}}
+    {:ok, %Workflow{id: id, work: work, acc: initial_acc, executing_jobs: %{}, executing_agents: %{}, completed_refs: MapSet.new()}}
+  end
+
+  @impl GenServer
+  def handle_cast({:add_job, job_def}, ctx) do
+    # Ensure tool is resolved from name if needed
+    job_def =
+      if is_binary(job_def.tool) do
+        Map.put(job_def, :tool, Urza.Toolset.get(job_def.tool))
+      else
+        job_def
+      end
+
+    job = struct!(Urza.Workflow.Job, job_def)
+    work = ctx.work ++ [job]
+    ctx = %{ctx | work: work}
+    ctx = queue_ready_jobs(ctx)
+    {:noreply, ctx}
   end
 
   @impl GenServer
@@ -71,6 +94,27 @@ defmodule Urza.Workflow do
     end
   end
 
+  @impl GenServer
+  def handle_info({:agent_finished, ref, results}, ctx) do
+    acc = Map.merge(results, ctx.acc)
+    completed_refs = MapSet.put(ctx.completed_refs, ref)
+    executing_agents = Map.delete(ctx.executing_agents, ref)
+
+    ctx = %{ctx | acc: acc, completed_refs: completed_refs, executing_agents: executing_agents}
+
+    if ref do
+      Phoenix.PubSub.broadcast(Urza.PubSub, ctx.id, {:job_completed, ref, results})
+    end
+
+    if Enum.empty?(ctx.executing_jobs) and Enum.empty?(ctx.executing_agents) and Enum.empty?(ctx.work) do
+      IO.inspect("completed execution !!!")
+      {:noreply, ctx}
+    else
+      ctx = queue_ready_jobs(ctx)
+      {:noreply, ctx}
+    end
+  end
+
   defp queue_ready_jobs(ctx) do
     {runnable_jobs, waiting_jobs} =
       Enum.split_with(ctx.work, fn job ->
@@ -85,7 +129,19 @@ defmodule Urza.Workflow do
       end)
       |> Map.new()
 
-    %{ctx | work: waiting_jobs, executing_jobs: Map.merge(ctx.executing_jobs, new_executing_jobs)}
+    %{ctx | work: waiting_jobs, executing_jobs: Map.merge(ctx.executing_jobs, new_executing_jobs), executing_agents: ctx.executing_agents}
+  end
+
+  defp start_agent(job, workflow_id, acc) do
+    args = decode_args(job.args, acc)
+    agent_opts = [
+      name: "#{workflow_id}_agent_#{job.ref}",
+      parent: self(),
+      workflow_id: workflow_id,
+      goal: args["goal"],
+      available_tools: args["tools"],
+      ref: job.ref
+    ]
   end
 
   defp dependencies_met?(deps, completed_refs) do
@@ -116,7 +172,7 @@ defmodule Urza.Workflow do
   defp detect_dead_graph(ctx) when is_struct(ctx,Workflow) do
     runnable =
     Enum.any?(ctx.work, fn job -> dependencies_met?(job.deps, ctx.completed_refs) end)
-    if !runnable and map_size(ctx.executing_jobs) == 0 and ctx.work != [] do
+    if !runnable and map_size(ctx.executing_jobs) == 0 and map_size(ctx.executing_agents) == 0 and ctx.work != [] do
       IO.puts("🚨 Dead graph detected! Remaining waiting jobs cannot run: #{inspect(ctx.work)}")
       exit("Illegal state handle")
     end
