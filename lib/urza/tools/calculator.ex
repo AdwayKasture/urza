@@ -1,6 +1,6 @@
 defmodule Urza.Tools.Calculator do
   alias Phoenix.PubSub
-  use Oban.Worker,queue: :network
+  use Oban.Worker
   @behaviour Urza.Tool
 
 
