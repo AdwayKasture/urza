@@ -183,7 +183,6 @@ defmodule Urza.Workflow do
   end
 
   @moduledoc """
-  handle loops (on hold for now) 
   handle ai agent
 
   """
@@ -299,4 +298,28 @@ defmodule Urza.Workflow do
       ]
     }
   end
+
+  # TODO
+  def test_agent() do
+    %{
+      id: "agent",
+      work: [
+        %{
+          agent: "007",
+          tools: ["calculator","echo"],
+          goal: "add 33,27 and then divide by then, then print it",
+          ref: "$agent_007",
+          deps: []
+        },
+        %{
+          tool: Echo,
+          args: %{"content" => {:dyn,"$agent_007"}},
+          ref: nil,
+          deps: ["$agent_007"]
+        }
+
+      ]
+    }
+  end
+
 end

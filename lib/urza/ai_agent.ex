@@ -4,7 +4,7 @@ defmodule Urza.AiAgent do
   alias Urza.Workflow
   alias Urza.Toolset
 
-  @model "gemini"
+  @model "google:gemini-2.0-flash"
 
   defstruct goal: nil,
             available_tools: [],
@@ -50,19 +50,18 @@ defmodule Urza.AiAgent do
   def call_ai(state) do
     tool_specs = build_tool_specs(state.available_tools)
     messages = build_messages(state.goal, state.history, tool_specs)
-
-    schema = [
-      tool_name: [type: :string, required: true],
-      args: [type: :map, required: true, doc: "refer to schema mentioned for tool"]
-    ]
-
-    {:ok, %Response{object: tool}} = ReqLLM.generate_object("gemini", messages, schema)
-    state = schedule_tool(tool, state)
+    {:ok, resp} = ReqLLM.generate_text(@model, messages)
+    state = resp
+    |> Response.text()
+    |> String.trim_leading("```tool_code\n")
+    |> String.trim_trailing("\n```")
+    |> JSON.decode!()
+    |> schedule_tool(state)
 
     {:noreply, state}
   end
 
-  def schedule_tool(%{tool_name: name, args: args}, state) do
+  def schedule_tool(%{"tool" => name,"args" => args}, state) do
     tool_ref = "agent_#{state.ref}_tool_#{System.unique_integer([:monotonic])}"
 
     encode_args =
@@ -78,15 +77,12 @@ defmodule Urza.AiAgent do
       deps: []
     }
 
-    history = state.history ++ [ReqLLM.Context.assistant("executing #{name}")]
+    history = state.history ++ [ReqLLM.Context.user("executing #{name}")]
     send(self(), {:exec, job_def})
 
-    state =
       state
       |> Map.put(:current_tool_ref, tool_ref)
       |> Map.put(:history, history)
-
-    state
   end
 
   def build_messages(goal, history, tools) do
@@ -110,7 +106,10 @@ defmodule Urza.AiAgent do
   def system_prompt() do
     """
     You are an AI assistant. Your goal is to help the user by calling tools.
-    You can call one tool at a time. When you have the final answer, respond with the answer directly.
+    You can call one tool at a time.
+    to call a tool you must give a JSON format such as 
+    {"tool": calculator,"args": {"o": "add","l": 3,"r": 5}}
+    When you have the final answer, {"answer": 'your answer'}.
     """
   end
 end

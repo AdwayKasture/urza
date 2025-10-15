@@ -35,3 +35,5 @@ urza-*.tar
 npm-debug.log
 /assets/node_modules/
 
+# enviornment variables
+.env

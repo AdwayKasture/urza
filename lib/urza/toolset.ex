@@ -9,10 +9,15 @@ defmodule Urza.Toolset do
   end
 
   def format_tool(module) do
+    schema =
+      module.parameter_schema()
+      |> Schema.to_json()
+      |> JSON.encode!()
+
     """
       name: #{module.name()},
       description: #{module.description()},
-      parameter_schema: #{Schema.to_json(module.parameter_schema())}
+      parameter_schema: #{schema}
     """
   end
 end

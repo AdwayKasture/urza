@@ -30,7 +30,23 @@ defmodule Urza.Tools.Calculator do
 
   @impl Urza.Tool
   def parameter_schema() do
-    [l: [type: :float, required: true], r: [type: :float, required: true], o: [type: :string]]
+  [
+    l: [
+      type: :float,
+      required: true,
+      doc: "The left-hand operand for the calculation."
+    ],
+    r: [
+      type: :float,
+      required: true,
+      doc: "The right-hand operand for the calculation."
+    ],
+    o: [
+      type: :string,
+      # 'required' defaults to false, matching the absence of 'required: true'
+      doc: "The operation to perform (e.g., 'add', 'multiply')."
+    ]
+  ]
   end
 
   @impl Urza.Tool
