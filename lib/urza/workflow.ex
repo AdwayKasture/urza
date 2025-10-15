@@ -1,5 +1,5 @@
 defmodule Urza.Workflow do
-  alias Urza.Tools.{HumanCheckpoint,Calculator,Echo,Wait}
+  alias Urza.Tools.{HumanCheckpoint, Calculator, Echo, Wait, Branch}
   alias Urza.Workflow
   alias Oban.Job
   alias Phoenix.PubSub
@@ -15,11 +15,11 @@ defmodule Urza.Workflow do
             executing_agents: %{},
             completed_refs: MapSet.new()
 
-  def start_link({id,work,acc}) do
+  def start_link({id, work, acc}) do
     # Use the :via tuple to register the process using the Registry
     name = {:via, Registry, {Urza.WorkflowRegistry, id}}
-  
-    GenServer.start_link(Workflow,%{id: id,work: work,acc: acc}, name: name)
+
+    GenServer.start_link(Workflow, %{id: id, work: work, acc: acc}, name: name)
   end
 
   def add_job(workflow_id, job_def) do
@@ -34,20 +34,20 @@ defmodule Urza.Workflow do
 
     PubSub.subscribe(Urza.PubSub, id)
     send(self(), :start)
-    {:ok, %Workflow{id: id, work: work, acc: initial_acc, executing_jobs: %{}, executing_agents: %{}, completed_refs: MapSet.new()}}
+
+    {:ok,
+     %Workflow{
+       id: id,
+       work: work,
+       acc: initial_acc,
+       executing_jobs: %{},
+       executing_agents: %{},
+       completed_refs: MapSet.new()
+     }}
   end
 
   @impl GenServer
-  def handle_cast({:add_job, job_def}, ctx) do
-    # Ensure tool is resolved from name if needed
-    job_def =
-      if is_binary(job_def.tool) do
-        Map.put(job_def, :tool, Urza.Toolset.get(job_def.tool))
-      else
-        job_def
-      end
-
-    job = struct!(Urza.Workflow.Job, job_def)
+  def handle_cast({:add_job, job}, ctx) do
     work = ctx.work ++ [job]
     ctx = %{ctx | work: work}
     ctx = queue_ready_jobs(ctx)
@@ -63,9 +63,40 @@ defmodule Urza.Workflow do
 
   @impl GenServer
   def handle_info(:heartbeat, ctx) do
-    detect_dead_graph(ctx)
+    # detect_dead_graph(ctx)
     schedule_heartbeat()
-    {:noreply,ctx}
+    {:noreply, ctx}
+  end
+
+  @impl GenServer
+  def handle_info({:branch, job_id, refs}, ctx) when is_integer(job_id) do
+    case Map.fetch(ctx.executing_jobs, job_id) do
+      :error ->
+        # Job not tracked, ignore.
+        {:noreply, ctx}
+
+      # 'job' is the Urza.Workflow.Job struct
+      {:ok, _job} ->
+        # 2. Update the completed references set.
+        completed_refs =
+          Enum.reduce(refs, ctx.completed_refs, fn ref, acc -> MapSet.put(acc, ref) end)
+
+        # 3. Clean up the executing jobs map.
+        executing_jobs = Map.delete(ctx.executing_jobs, job_id)
+
+        # 4. Update the context (note: no 'acc' update, as this is a flow control job)
+        ctx = %{ctx | executing_jobs: executing_jobs, completed_refs: completed_refs}
+
+        # 5. Check for new runnable jobs and continue the workflow.
+        if Enum.empty?(ctx.executing_jobs) and Enum.empty?(ctx.executing_agents) and
+             Enum.empty?(ctx.work) do
+          IO.inspect("completed execution !!!")
+          {:noreply, ctx}
+        else
+          ctx = queue_ready_jobs(ctx)
+          {:noreply, ctx}
+        end
+    end
   end
 
   # For Tool work completetion
@@ -78,7 +109,6 @@ defmodule Urza.Workflow do
 
       {:ok, ref} ->
         acc = Map.merge(ret, ctx.acc)
-        IO.inspect(acc)
 
         completed_refs = if ref, do: MapSet.put(ctx.completed_refs, ref), else: ctx.completed_refs
         executing_jobs = Map.delete(ctx.executing_jobs, job_id)
@@ -91,27 +121,6 @@ defmodule Urza.Workflow do
           ctx = queue_ready_jobs(ctx)
           {:noreply, ctx}
         end
-    end
-  end
-
-  @impl GenServer
-  def handle_info({:agent_finished, ref, results}, ctx) do
-    acc = Map.merge(results, ctx.acc)
-    completed_refs = MapSet.put(ctx.completed_refs, ref)
-    executing_agents = Map.delete(ctx.executing_agents, ref)
-
-    ctx = %{ctx | acc: acc, completed_refs: completed_refs, executing_agents: executing_agents}
-
-    if ref do
-      Phoenix.PubSub.broadcast(Urza.PubSub, ctx.id, {:job_completed, ref, results})
-    end
-
-    if Enum.empty?(ctx.executing_jobs) and Enum.empty?(ctx.executing_agents) and Enum.empty?(ctx.work) do
-      IO.inspect("completed execution !!!")
-      {:noreply, ctx}
-    else
-      ctx = queue_ready_jobs(ctx)
-      {:noreply, ctx}
     end
   end
 
@@ -129,19 +138,12 @@ defmodule Urza.Workflow do
       end)
       |> Map.new()
 
-    %{ctx | work: waiting_jobs, executing_jobs: Map.merge(ctx.executing_jobs, new_executing_jobs), executing_agents: ctx.executing_agents}
-  end
-
-  defp start_agent(job, workflow_id, acc) do
-    args = decode_args(job.args, acc)
-    agent_opts = [
-      name: "#{workflow_id}_agent_#{job.ref}",
-      parent: self(),
-      workflow_id: workflow_id,
-      goal: args["goal"],
-      available_tools: args["tools"],
-      ref: job.ref
-    ]
+    %{
+      ctx
+      | work: waiting_jobs,
+        executing_jobs: Map.merge(ctx.executing_jobs, new_executing_jobs),
+        executing_agents: ctx.executing_agents
+    }
   end
 
   defp dependencies_met?(deps, completed_refs) do
@@ -167,12 +169,14 @@ defmodule Urza.Workflow do
     |> Map.new()
   end
 
-  defp schedule_heartbeat(),do: Process.send_after(self(),:heartbeat,@heartbeat_interval)
-   
-  defp detect_dead_graph(ctx) when is_struct(ctx,Workflow) do
+  defp schedule_heartbeat(), do: Process.send_after(self(), :heartbeat, @heartbeat_interval)
+
+  def detect_dead_graph(ctx) when is_struct(ctx, Workflow) do
     runnable =
-    Enum.any?(ctx.work, fn job -> dependencies_met?(job.deps, ctx.completed_refs) end)
-    if !runnable and map_size(ctx.executing_jobs) == 0 and map_size(ctx.executing_agents) == 0 and ctx.work != [] do
+      Enum.any?(ctx.work, fn job -> dependencies_met?(job.deps, ctx.completed_refs) end)
+
+    if !runnable and map_size(ctx.executing_jobs) == 0 and map_size(ctx.executing_agents) == 0 and
+         ctx.work != [] do
       IO.puts("🚨 Dead graph detected! Remaining waiting jobs cannot run: #{inspect(ctx.work)}")
       exit("Illegal state handle")
     end
@@ -208,11 +212,11 @@ defmodule Urza.Workflow do
             "op" => {:const, "multiply"}
           },
           ref: "$3",
-          deps: ["$1","$2"]
+          deps: ["$1", "$2"]
         },
         %{
           tool: Echo,
-          args: %{"content" => {:dyn,"$3"}},
+          args: %{"content" => {:dyn, "$3"}},
           ref: nil,
           deps: ["$3"]
         }
@@ -235,24 +239,24 @@ defmodule Urza.Workflow do
           args: %{},
           ref: "$2",
           deps: []
-          },
+        },
         %{
           tool: Echo,
-          args: %{"content" => {:const,"done!!"}},
+          args: %{"content" => {:const, "done!!"}},
           ref: "$3",
-          deps: ["$1","$2"]
+          deps: ["$1", "$2"]
         }
       ]
     }
   end
 
-  def test_human_checkpoint() do 
+  def test_human_checkpoint() do
     %{
       id: "human",
       work: [
         %{
           tool: HumanCheckpoint,
-          args: %{"state" => {:const,"pending"},"message" => {:const,"are you cracked dev ?"}},
+          args: %{"state" => {:const, "pending"}, "message" => {:const, "are you cracked dev ?"}},
           ref: "$1",
           deps: []
         },
@@ -263,7 +267,36 @@ defmodule Urza.Workflow do
           deps: ["$1"]
         }
       ]
-    } 
+    }
   end
 
+  def test_branch(criteria) do
+    %{
+      id: "branchy",
+      work: [
+        %{
+          tool: Branch,
+          args: %{
+            "condition" => {:const, criteria},
+            "true" => {:const, "$1"},
+            "false" => {:const, "$2"}
+          },
+          ref: nil,
+          deps: []
+        },
+        %{
+          tool: Echo,
+          args: %{"content" => {:const, "true case !!"}},
+          ref: nil,
+          deps: ["$1"]
+        },
+        %{
+          tool: Echo,
+          args: %{"content" => {:const, "false case !!"}},
+          ref: nil,
+          deps: ["$2"]
+        }
+      ]
+    }
+  end
 end

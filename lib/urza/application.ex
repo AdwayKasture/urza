@@ -10,7 +10,7 @@ defmodule Urza.Application do
     children = [
       UrzaWeb.Telemetry,
       Urza.Repo,
-      {Registry,keys: :unique,name: Urza.WorkflowRegistry},
+      {Registry, keys: :unique, name: Urza.WorkflowRegistry},
       Urza.WorkflowSupervisor,
       {DNSCluster, query: Application.get_env(:urza, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Urza.PubSub},

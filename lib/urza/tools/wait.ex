@@ -3,12 +3,11 @@ defmodule Urza.Tools.Wait do
   @behaviour Urza.Tool
   alias Phoenix.PubSub
 
-
   @impl Oban.Worker
-  def perform(%Job{args: args,id: id,meta: %{"workflow_id" => wf,"ref" => ref}}) do
-    {:ok,ret} = run(args)
-    #publish  on id
-    PubSub.broadcast(Urza.PubSub,wf,{id,%{ref => ret}})
+  def perform(%Job{args: args, id: id, meta: %{"workflow_id" => wf, "ref" => ref}}) do
+    {:ok, ret} = run(args)
+    # publish  on id
+    PubSub.broadcast(Urza.PubSub, wf, {id, %{ref => ret}})
     :ok
   end
 
@@ -17,20 +16,19 @@ defmodule Urza.Tools.Wait do
     1000..2000
     |> Enum.random()
     |> Process.sleep()
-    
-    {:ok,"sleeep!"}
+
+    {:ok, "sleeep!"}
   end
 
   @impl Urza.Tool
-  def name(),do: "sleep"
+  def name(), do: "sleep"
 
   @impl Urza.Tool
-  def description(),do: "Used to sleep a random duration"
+  def description(), do: "Used to sleep a random duration"
 
   @impl Urza.Tool
-  def return_schema(),do: []
-  
+  def return_schema(), do: []
+
   @impl Urza.Tool
-  def parameter_schema(),do: []
-  
+  def parameter_schema(), do: []
 end

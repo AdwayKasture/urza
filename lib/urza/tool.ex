@@ -5,7 +5,7 @@ defmodule Urza.Tool do
   """
 
   # TODO use reqllm tool api  
-  @callback run(map()) :: {:ok, any()} 
+  @callback run(map()) :: {:ok, any()}
 
   @callback name() :: String.t()
 
@@ -15,6 +15,5 @@ defmodule Urza.Tool do
 
   @callback return_schema() :: Keyword.t()
 
-  @optional_callbacks [description: 0] 
-  
+  @optional_callbacks [description: 0]
 end

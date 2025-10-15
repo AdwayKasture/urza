@@ -13,8 +13,8 @@ defmodule Urza.Tools.AgentRunner do
   @impl Urza.Tool
   def return_schema(), do: []
 
-  @impl Urza.Tool 
-  def run(_),do: {:ok,:ok}
+  @impl Urza.Tool
+  def run(_), do: {:ok, :ok}
 
   # This tool is not an Oban worker, so it doesn't implement `perform`.
   # It's a virtual tool handled by the Urza.Workflow GenServer.

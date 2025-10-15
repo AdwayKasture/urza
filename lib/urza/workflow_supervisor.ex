@@ -14,8 +14,7 @@ defmodule Urza.WorkflowSupervisor do
 
   # Client function to start a new Urza.Workflow
   def start_workflow(id, work, initial_acc \\ %{}) do
-    
-    child_spec = {Workflow,{id,work,initial_acc}}
+    child_spec = {Workflow, {id, work, initial_acc}}
     DynamicSupervisor.start_child(__MODULE__, child_spec)
   end
 end
