@@ -38,15 +38,16 @@ defmodule Urza.Workflow do
     PubSub.subscribe(Urza.PubSub, id)
     send(self(), :start)
 
-    {:ok,
-     %Workflow{
-       id: id,
-       work: work,
-       acc: initial_acc,
-       executing_jobs: %{},
-       executing_agents: [],
-       completed_refs: MapSet.new()
-     }}
+    state = %Workflow{
+      id: id,
+      work: work,
+      acc: initial_acc,
+      executing_jobs: %{},
+      executing_agents: [],
+      completed_refs: MapSet.new()
+    }
+    # TODO: Persist the initial workflow state here.
+    {:ok, state}
   end
 
   @impl GenServer
@@ -54,6 +55,7 @@ defmodule Urza.Workflow do
     work = ctx.work ++ [job]
     ctx = %{ctx | work: work}
     ctx = queue_ready_jobs(ctx)
+    # TODO: Persist the workflow state here after adding a job.
     {:noreply, ctx}
   end
 
@@ -80,6 +82,7 @@ defmodule Urza.Workflow do
             completed_refs: completed_refs
         }
 
+        # TODO: Persist the workflow state here after an agent has finished.
         if Enum.empty?(ctx.executing_jobs) and Enum.empty?(ctx.executing_agents) and
              Enum.empty?(ctx.work) do
           IO.inspect("completed execution !!!")
@@ -95,6 +98,7 @@ defmodule Urza.Workflow do
   def handle_info(:start, ctx) do
     schedule_heartbeat()
     ctx = queue_ready_jobs(ctx)
+    # TODO: Persist the workflow state here after starting and queueing ready jobs.
     {:noreply, ctx}
   end
 
@@ -123,6 +127,7 @@ defmodule Urza.Workflow do
         # 4. Update the context (note: no 'acc' update, as this is a flow control job)
         ctx = %{ctx | executing_jobs: executing_jobs, completed_refs: completed_refs}
 
+        # TODO: Persist the workflow state here after a branch tool has finished.
         # 5. Check for new runnable jobs and continue the workflow.
         if Enum.empty?(ctx.executing_jobs) and Enum.empty?(ctx.executing_agents) and
              Enum.empty?(ctx.work) do
@@ -150,6 +155,7 @@ defmodule Urza.Workflow do
         executing_jobs = Map.delete(ctx.executing_jobs, job_id)
         ctx = %{ctx | acc: acc, executing_jobs: executing_jobs, completed_refs: completed_refs}
 
+        # TODO: Persist the workflow state here after a tool has finished.
         if Enum.empty?(ctx.executing_jobs) and Enum.empty?(ctx.work) do
           IO.inspect("completed execution !!!")
           {:noreply, ctx}

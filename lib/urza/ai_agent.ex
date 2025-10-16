@@ -29,15 +29,19 @@ defmodule Urza.AiAgent do
     PubSub.subscribe(Urza.PubSub, ref)
     send(self(), :start)
 
-    {:ok,
-     %__MODULE__{
-       workflow_id: workflow_id,
-       goal: goal,
-       available_tools: available_tools,
-       ref: ref,
-       history: [],
-       seq: 0
-     }}
+    state =
+      %__MODULE__{
+        workflow_id: workflow_id,
+        goal: goal,
+        available_tools: available_tools,
+        ref: ref,
+        history: [],
+        seq: 0
+      }
+
+    # TODO: Persist the initial agent state here.
+    # This could be done by saving the `state` struct to a database.
+    {:ok, state}
   end
 
   @impl true
@@ -51,6 +55,7 @@ defmodule Urza.AiAgent do
     IO.inspect("Tool returned: #{val}")
     history = state.history ++ [ReqLLM.Context.user("tool returned: #{val}")]
     state = %{state | history: history}
+    # TODO: Persist the updated agent state here after a tool returns.
     call_ai(state)
   end
 
@@ -68,6 +73,7 @@ defmodule Urza.AiAgent do
       |> JSON.decode!()
       |> schedule_tool(state)
 
+    # TODO: Persist the updated agent state here after calling the AI.
     {:noreply, state}
   end
 

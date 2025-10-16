@@ -169,6 +169,14 @@ Built on top of Oban, Urza inherits its powerful reliability features. Jobs can 
 
 ---
 
+
+Pending:
+    * Test distributed elixir
+    * Looping
+    * Marked persistence for handling crashes/replays/resume impl it
+
+
+---
 ## Architecture
 
 ### Core Workflow
@@ -225,6 +233,7 @@ Urza is designed to scale horizontally. By running multiple Elixir nodes, you ca
 reference: https://hexdocs.pm/oban/clustering.html
     
 node specific job queues: https://hexdocs.pm/oban/splitting-queues.html
+
 
 ---
 ## Getting Started
