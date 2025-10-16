@@ -14,7 +14,7 @@ defmodule Urza.Workflow do
             acc: %{},
             # map with (job_id => ref)
             executing_jobs: %{},
-            # list of agent refs 
+            # list of agent refs
             executing_agents: [],
             completed_refs: MapSet.new()
 
@@ -247,7 +247,7 @@ defmodule Urza.Workflow do
 
   """
 
-  def test_missing_deps() do
+  def test_chaining() do
     %{
       id: "main-workflow",
       work: [
@@ -329,7 +329,7 @@ defmodule Urza.Workflow do
     }
   end
 
-  def test_branch(criteria) do
+  def test_branch(id,criteria) do
     %{
       id: "branchy",
       work: [
@@ -359,7 +359,6 @@ defmodule Urza.Workflow do
     }
   end
 
-  # TODO
   def test_agent() do
     %{
       id: "agent",

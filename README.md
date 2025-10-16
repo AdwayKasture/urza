@@ -2,9 +2,16 @@
 
 Welcome to Urza, a powerful, scalable workflow engine built with Elixir and powered by [Oban](https://getoban.pro/). Urza is designed to define and execute complex, multi-step workflows that can include concurrent job execution, conditional branching, human-in-the-loop checkpoints, and even AI-powered agents.
 
+Demo Links:
+Overview:  
+Simple DAG: 
+Human in the loop: 
+Branching:
+Agent: 
+
 ## Core Concept
 
-Urza treats workflows as code. A workflow is a simple Elixir map that defines a series of jobs, their dependencies, and how data flows between them. This approach makes workflows easy to create, version, and manage.
+Urza treats workflows as code. A workflow is a simple Elixir map that defines a series of jobs, their dependencies, and how data flows between them. This approach makes workflows easy to create and manage.
 
 ```elixir
 %{ 
@@ -19,9 +26,25 @@ Urza treats workflows as code. A workflow is a simple Elixir map that defines a 
 
 ## Features
 
-### Workflow as Code
+### Queueing tools
+Each "tool" used by Agents and DAGs is an Oban Job,
+this allows us to have 
+* Custom retries for different tools
+* Dedicated queues per resource
+* Automated retries, tracking and pausing 
+* rate limiting
+* Pausing/Killing/retrying jobs via dashboard/programmatically
 
-Workflows are defined in simple Elixir maps, making them easy to read, write, and version control.
+example
+
+```elixir
+  %{
+    tool: Urza.Tools.Echo,
+    args: %{"content" => {:const, "Hello world"}},
+    deps: [],
+    ref: []
+  }
+```
 
 ### Concurrent Execution (Fan-out/Fan-in)
 
@@ -33,6 +56,36 @@ graph TD
     A --> C[Job C]
     B --> D[Job D]
     C --> D
+```
+
+```elixir
+%{
+  tool: A,
+  args: %{},
+  ref: "$A",
+  deps: []
+},%{
+  tool: B,
+  args: %{},
+  ref: "$B",
+  deps: ["$A"]
+},%{
+  tool: C,
+  args: %{},
+  ref: "$C",
+  deps: ["$A"]
+},%{
+  tool: D,
+  args: %{},
+  ref: "$D",
+  deps: ["$B","$C"]
+}
+```
+
+### Dynamic job addition
+Since we are using a queue based mechanism we can dynamically create and add jobs for execution
+```elixir
+ iex> Urza.Workflow.add_job(workflow_id,%{tool: Urza.Tools.Echo,args: % .....})
 ```
 
 ### Dynamic Value Passing
@@ -54,8 +107,20 @@ Workflows can include conditional logic. The `Branch` tool allows a workflow to 
 
 ```mermaid
 graph TD
-    A[%{tool: Branch, ...}] -- true --> B[Job B]
+    A["%{tool: Branch, ...}"] -- true --> B[Job B]
     A -- false --> C[Job C]
+```
+```elixir
+%{
+  tool: Branch,
+  args: %{
+    "condition" => {:const, criteria},
+    "true" => {:const, "$1"},
+    "false" => {:const, "$2"}
+  },
+  ref: nil,
+  deps: []
+        },
 ```
 
 ### Human in the Loop
@@ -64,7 +129,28 @@ For tasks that require human intervention or approval, Urza provides a `HumanChe
 
 ### AI Agent Integration
 
-Urza can delegate complex, goal-oriented tasks to AI agents. An AI agent is given a set of tools and a goal, and it will autonomously create and execute a sequence of jobs to achieve that goal. The main workflow can start an agent and wait for its final result.
+Urza can delegate complex, goal-oriented tasks to AI agents. An AI agent is given a set of tools and a goal, and it will autonomously create and execute a sequence of jobs to achieve that goal. The main workflow can start an agent and wait for its final result.The LLm uses same tools as user so we have visibility through Oban web for the same
+
+```elixir
+  %{
+    id: "agent",
+    work: [
+      %{
+        agent: "007",
+        tools: ["calculator", "echo","wait"],
+        goal: "add 33,27 and then divide by then, then print it",
+        ref: "$agent_007",
+        deps: []
+      },
+      %{
+        tool: Echo,
+        args: %{"content" => {:dyn, "$agent_007"}},
+        ref: nil,
+        deps: ["$agent_007"]
+      }
+    ]
+  }
+```
 
 ### Resilience (Retries & Backoff)
 
@@ -124,14 +210,66 @@ Urza runs on the Elixir BEAM VM, which is designed for concurrency. It will natu
 ### Horizontal Scaling
 
 Urza is designed to scale horizontally. By running multiple Elixir nodes, you can create a distributed cluster of workers. Oban's distributed architecture ensures that jobs are processed by any available node, providing massive horizontal scalability for your workflows.
-
+reference: https://hexdocs.pm/oban/clustering.html
+node specific job queues: https://hexdocs.pm/oban/splitting-queues.html
 ---
 
 ## Getting Started
 
+Requires elixir (1.18) installed
+
 To start your Phoenix server:
 
 * Run `mix setup` to install and setup dependencies
-* Start Phoenix endpoint with `mix phx.server` or inside IEx with `iex -S mix phx.server`
+* Start  with `iex -S mix phx.server`
 
-Now you can visit [`localhost:4000`](http://localhost:4000) from your browser.
+Now you can visit [`localhost:4000`](http://localhost:4000/oban) to view jobs 
+
+*  N8N style DAG
+
+```
+iex -S mix phx.server
+iex> w = Urza.Workflow.test_chaining()
+iex> Urza.WorkflowSupervisor(w.id,w.work)
+```
+
+
+* run fan_in fan_out demo 
+
+```
+iex -S mix phx.server
+iex> w = Urza.Workflow.test_fan()
+iex> Urza.WorkflowSupervisor(w.id,w.work)
+```
+
+* run  agent demo
+
+```
+iex -S mix phx.server
+iex> w = Urza.Workflow.test_agent()
+iex> Urza.WorkflowSupervisor(w.id,w.work)
+```
+
+* run   human in the loop demo
+
+```
+iex -S mix phx.server
+iex> Phoenix.PubSub.subscribe(Urza.PubSub,"notification")
+iex> w = Urza.Workflow.test_human_checkpoint()
+iex> Urza.WorkflowSupervisor(w.id,w.work)
+iex> flush
+# will print out notification message with `job id`
+iex> Urza.Tools.HumanCheckPoint.approve(`job id`)
+```
+
+* run branching 
+```
+iex -S mix phx.server
+iex> w = Urza.Workflow.test_branch("1",true)
+iex> w2 = Urza.Workflow.test_branch("2",false)
+iex> Urza.WorkflowSupervisor(w.id,w.work)
+iex> Urza.WorkflowSupervisor(w2.id,w2.work)
+```
+
+
+
