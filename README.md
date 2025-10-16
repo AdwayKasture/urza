@@ -3,11 +3,16 @@
 Welcome to Urza, a powerful, scalable workflow engine built with Elixir and powered by [Oban](https://getoban.pro/). Urza is designed to define and execute complex, multi-step workflows that can include concurrent job execution, conditional branching, human-in-the-loop checkpoints, and even AI-powered agents.
 
 Demo Links:
-Overview:  
-Simple DAG: 
-Human in the loop: 
-Branching:
-Agent: 
+Overview: https://www.loom.com/share/003140ad359c43788f5df936979ac36f?sid=bfe60614-024d-4ce8-9e14-1c7b30fe9f0c
+
+
+Simple DAG: https://www.loom.com/share/49cc49ff8c7240d0b2525ec1e76e7172?sid=6d73a60a-e605-415b-89df-3dec4e362469 
+
+Human in the loop: https://www.loom.com/share/ad7fee539edf4e5e9290bdbf54bf3f46?sid=5dc3e157-9540-4d6d-bfe3-116e9fbe5638
+
+Branching: https://www.loom.com/share/7f3a1c03b138403aaaadd30253743c05?sid=ee76d5d8-5f81-4839-aae0-6f073cc9442b
+
+Agent: https://www.loom.com/share/b7580f6c3a1f4e97a31b08bb0f4a20e5?sid=c42580c1-d786-49ee-9b74-1f2bbd596278
 
 ## Core Concept
 
@@ -26,6 +31,12 @@ Urza treats workflows as code. A workflow is a simple Elixir map that defines a 
 
 ## Features
 
+## Easy creation of tools 
+
+ * user needs to implement run functions
+ * do oban config 
+ * and vercel standardaized to tool naming
+
 ### Queueing tools
 Each "tool" used by Agents and DAGs is an Oban Job,
 this allows us to have 
@@ -42,7 +53,7 @@ example
     tool: Urza.Tools.Echo,
     args: %{"content" => {:const, "Hello world"}},
     deps: [],
-    ref: []
+    ref: nil
   }
 ```
 
@@ -210,10 +221,12 @@ Urza runs on the Elixir BEAM VM, which is designed for concurrency. It will natu
 ### Horizontal Scaling
 
 Urza is designed to scale horizontally. By running multiple Elixir nodes, you can create a distributed cluster of workers. Oban's distributed architecture ensures that jobs are processed by any available node, providing massive horizontal scalability for your workflows.
+    
 reference: https://hexdocs.pm/oban/clustering.html
+    
 node specific job queues: https://hexdocs.pm/oban/splitting-queues.html
----
 
+---
 ## Getting Started
 
 Requires elixir (1.18) installed

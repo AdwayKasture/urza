@@ -331,7 +331,7 @@ defmodule Urza.Workflow do
 
   def test_branch(id,criteria) do
     %{
-      id: "branchy",
+      id: id,
       work: [
         %{
           tool: Branch,
