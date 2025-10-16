@@ -28,13 +28,13 @@ defmodule Urza.Tools.Echo do
 
   @impl Urza.Tool
   def parameter_schema() do
-  [
-    content: [
-      type: :string,
-      required: true,
-      doc: "The content string to be echoed to the console."
+    [
+      content: [
+        type: :string,
+        required: true,
+        doc: "The content string to be echoed to the console."
+      ]
     ]
-  ]
   end
 
   @impl Urza.Tool

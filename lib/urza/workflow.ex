@@ -1,7 +1,6 @@
 defmodule Urza.Workflow do
   alias Urza.Tools.{HumanCheckpoint, Calculator, Echo, Wait, Branch}
   alias Urza.Workflow
-  alias Urza.WorkflowSupervisor
   alias Urza.AiAgent
   alias Oban.Job
   alias Phoenix.PubSub
@@ -13,8 +12,10 @@ defmodule Urza.Workflow do
   defstruct id: nil,
             work: [],
             acc: %{},
+            # map with (job_id => ref)
             executing_jobs: %{},
-            executing_agents: %{},
+            # list of agent refs 
+            executing_agents: [],
             completed_refs: MapSet.new()
 
   def start_link({id, work, acc}) do
@@ -43,7 +44,7 @@ defmodule Urza.Workflow do
        work: work,
        acc: initial_acc,
        executing_jobs: %{},
-       executing_agents: %{},
+       executing_agents: [],
        completed_refs: MapSet.new()
      }}
   end
@@ -54,6 +55,40 @@ defmodule Urza.Workflow do
     ctx = %{ctx | work: work}
     ctx = queue_ready_jobs(ctx)
     {:noreply, ctx}
+  end
+
+  # For Agent work completetion
+  @impl GenServer
+  def handle_cast({:agent_done, ref, ret}, ctx) do
+    IO.puts("Agent #{ref} has completed task !!!")
+
+    case Enum.member?(ctx.executing_agents, ref) do
+      false ->
+        # Agent not tracked, ignore.
+        {:noreply, ctx}
+
+      true ->
+        acc = Map.merge(%{ref => ret}, ctx.acc)
+
+        completed_refs = if ref, do: MapSet.put(ctx.completed_refs, ref), else: ctx.completed_refs
+        executing_agents = Enum.reject(ctx.executing_agents, fn v -> v == ref end)
+
+        ctx = %{
+          ctx
+          | acc: acc,
+            executing_agents: executing_agents,
+            completed_refs: completed_refs
+        }
+
+        if Enum.empty?(ctx.executing_jobs) and Enum.empty?(ctx.executing_agents) and
+             Enum.empty?(ctx.work) do
+          IO.inspect("completed execution !!!")
+          {:noreply, ctx}
+        else
+          ctx = queue_ready_jobs(ctx)
+          {:noreply, ctx}
+        end
+    end
   end
 
   @impl GenServer
@@ -77,7 +112,6 @@ defmodule Urza.Workflow do
         # Job not tracked, ignore.
         {:noreply, ctx}
 
-      # 'job' is the Urza.Workflow.Job struct
       {:ok, _job} ->
         # 2. Update the completed references set.
         completed_refs =
@@ -126,48 +160,17 @@ defmodule Urza.Workflow do
     end
   end
 
-  # For Agent work completetion
-  @impl GenServer
-  def handle_info({:agent_done, ref, ret}, ctx) do
-    case Map.fetch(ctx.executing_agents, ref) do
-      :error ->
-        # Job not tracked, ignore.
-        {:noreply, ctx}
-
-      {:ok, _} ->
-        acc = Map.merge(ret, ctx.acc)
-
-        completed_refs = if ref, do: MapSet.put(ctx.completed_refs, ref), else: ctx.completed_refs
-        executing_agents = Map.delete(ctx.executing_agents, ref)
-
-        ctx = %{
-          ctx
-          | acc: acc,
-            executing_agents: executing_agents,
-            completed_refs: completed_refs
-        }
-
-        if Enum.empty?(ctx.executing_jobs) and Enum.empty?(ctx.executing_agents) and
-             Enum.empty?(ctx.work) do
-          IO.inspect("completed execution !!!")
-          {:noreply, ctx}
-        else
-          ctx = queue_ready_jobs(ctx)
-          {:noreply, ctx}
-        end
-    end
-  end
-
   defp queue_ready_jobs(ctx) do
+    # identify which jobs/agents can be fired
     {runnable, waiting} =
       Enum.split_with(ctx.work, fn job ->
         dependencies_met?(job.deps, ctx.completed_refs)
       end)
 
     {runnable_agents, runnable_jobs} =
-      Enum.partition(runnable, fn
-        %{agent: _, goal: _, tools: _} -> true
-        _ -> false
+      Enum.split_with(runnable, fn
+        %{agent: _, goal: _, tools: _, ref: _} -> true
+        %{tool: _} -> false
       end)
 
     new_executing_jobs =
@@ -179,18 +182,13 @@ defmodule Urza.Workflow do
       |> Map.new()
 
     new_executing_agents =
-      runnable_agents
-      |> Enum.map(fn agent ->
-        queue_one_agent(agent, ctx.id, ctx.acc)
-        {agent.ref, agent}
-      end)
-      |> Map.new()
+      Enum.map(runnable_agents, fn agent -> queue_one_agent(agent, ctx.id, ctx.acc) end)
 
     %{
       ctx
       | work: waiting,
         executing_jobs: Map.merge(ctx.executing_jobs, new_executing_jobs),
-        executing_agents: Map.merge(ctx.executing_agents, new_executing_agents)
+        executing_agents: ctx.executing_agents ++ new_executing_agents
     }
   end
 
@@ -199,17 +197,17 @@ defmodule Urza.Workflow do
   end
 
   defp queue_one_agent(agent, workflow_id, _acc) do
-    agent_ref = System.unique_integer([:monotonic])
-
     opts = [
       name: {:via, Registry, {Urza.WorkflowRegistry, agent.ref}},
       workflow_id: workflow_id,
       goal: agent.goal,
       available_tools: agent.tools,
-      ref: agent_ref
+      ref: agent.ref
     ]
 
-    DynamicSupervisor.start_child(Urza.WorkflowSupervisor, {AiAgent, opts})
+    # reusing the same supervisor for our agents
+    {:ok, _pid} = DynamicSupervisor.start_child(Urza.WorkflowSupervisor, {AiAgent, opts})
+    agent.ref
   end
 
   defp queue_one_job(job, workflow_id, acc) do
@@ -368,20 +366,18 @@ defmodule Urza.Workflow do
       work: [
         %{
           agent: "007",
-          tools: ["calculator","echo"],
+          tools: ["calculator", "echo"],
           goal: "add 33,27 and then divide by then, then print it",
           ref: "$agent_007",
           deps: []
         },
         %{
           tool: Echo,
-          args: %{"content" => {:dyn,"$agent_007"}},
+          args: %{"content" => {:dyn, "$agent_007"}},
           ref: nil,
           deps: ["$agent_007"]
         }
-
       ]
     }
   end
-
 end

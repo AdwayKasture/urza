@@ -27,8 +27,6 @@ defmodule Urza.Tools.HumanCheckpoint do
 
   @impl Urza.Tool
   def run(%{"user_id" => user_id, "job_id" => job_id, "message" => msg}) do
-    IO.inspect({"requiring workflow update for #{user_id} for #{msg}", job_id})
-
     PubSub.broadcast(
       Urza.PubSub,
       "notification",

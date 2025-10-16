@@ -8,7 +8,6 @@ defmodule Urza.WorkflowSupervisor do
 
   @impl true
   def init(_init_arg) do
-    # DynamicSupervisor only supports the :one_for_one strategy
     DynamicSupervisor.init(strategy: :one_for_one)
   end
 

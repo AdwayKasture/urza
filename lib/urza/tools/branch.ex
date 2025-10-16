@@ -9,7 +9,6 @@ defmodule Urza.Tools.Branch do
   def perform(%Job{args: args, id: id, meta: %{"workflow_id" => wf}}) do
     {:ok, refs} = run(args)
     # publish  on id
-    IO.inspect({"broadcasting", refs})
     PubSub.broadcast(Urza.PubSub, wf, {:branch, id, refs})
     :ok
   end

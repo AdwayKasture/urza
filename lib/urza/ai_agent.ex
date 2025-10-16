@@ -1,9 +1,8 @@
 defmodule Urza.AiAgent do
   use GenServer
+  alias Mint.HTTP1.Response
   alias ReqLLM.Response
-  alias Urza.Workflow
   alias Urza.Toolset
-  alias Oban.Job
   alias Phoenix.PubSub
 
   @model "google:gemini-2.0-flash"
@@ -13,7 +12,8 @@ defmodule Urza.AiAgent do
             history: [],
             workflow_id: nil,
             ref: nil,
-            current_tool_ref: nil
+            current_tool_ref: nil,
+            seq: 0
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: opts[:name])
@@ -35,7 +35,8 @@ defmodule Urza.AiAgent do
        goal: goal,
        available_tools: available_tools,
        ref: ref,
-       history: []
+       history: [],
+       seq: 0
      }}
   end
 
@@ -45,37 +46,46 @@ defmodule Urza.AiAgent do
   end
 
   @impl GenServer
-  def handle_info({_job_id, result}, state) do
-    history = state.history ++ [ReqLLM.Context.user(result)]
+  def handle_info({_job_id, res}, state) do
+    val = res[state.current_tool_ref]
+    IO.inspect("Tool returned: #{val}")
+    history = state.history ++ [ReqLLM.Context.user("tool returned: #{val}")]
     state = %{state | history: history}
     call_ai(state)
   end
 
   def call_ai(state) do
-    tool_specs = build_tool_specs(state.available_tools)
-    messages = build_messages(state.goal, state.history, tool_specs)
+    messages = build_messages(state.goal, state.history, state.available_tools)
     {:ok, resp} = ReqLLM.generate_text(@model, messages)
+    text = Response.text(resp)
+    IO.inspect("LLM response: #{text}")
 
-    state = resp
-    |> Response.text()
-    |> String.trim()
-    |> String.trim_leading("```json")
-    |> String.trim_trailing("```")
-    |> IO.inspect()
-    |> JSON.decode!()
-    |> schedule_tool(state)
+    state =
+      text
+      |> String.trim()
+      |> String.trim_leading("```json\n")
+      |> String.trim_trailing("\n```")
+      |> JSON.decode!()
+      |> schedule_tool(state)
 
     {:noreply, state}
   end
 
   def schedule_tool(%{"answer" => answer}, state) do
     # Agent has finished, notify the main workflow
-    GenServer.cast({:via, Registry, {Urza.WorkflowRegistry, state.workflow_id}}, {:agent_done, state.ref, answer})
+    IO.inspect("Agent is returning : #{answer}")
+
+    GenServer.cast(
+      {:via, Registry, {Urza.WorkflowRegistry, state.workflow_id}},
+      {:agent_done, state.ref, answer}
+    )
+
     state
   end
 
   def schedule_tool(%{"tool" => name, "args" => args}, state) do
-    tool_ref = "agent_#{state.ref}_tool_#{System.unique_integer([:monotonic])}"
+    seq = state.seq + 1
+    tool_ref = "agent_#{state.ref}_tool_#{seq}"
 
     queue_tool_job(name, args, tool_ref, state.ref)
 
@@ -84,25 +94,19 @@ defmodule Urza.AiAgent do
     state
     |> Map.put(:current_tool_ref, tool_ref)
     |> Map.put(:history, history)
+    |> Map.put(:seq, seq)
   end
 
   defp queue_tool_job(tool_name, args, tool_ref, agent_ref) do
     meta = %{workflow_id: agent_ref, ref: tool_ref}
 
-    # In an agent context all args are constants
-    encode_args =
-      args
-      |> Map.to_list()
-      |> Enum.map(fn {k, v} -> {k, {:const, v}} end)
-      |> Map.new()
-
-    Toolset.get(tool_name).new(encode_args, meta: meta)
+    Toolset.get(tool_name).new(args, meta: meta)
     |> Oban.insert()
   end
 
   def build_messages(goal, history, tools) do
     [
-      ReqLLM.Context.system(system_prompt()),
+      ReqLLM.Context.system(system_prompt(tools)),
       ReqLLM.Context.user(goal),
       ReqLLM.Context.user(
         "You have access to the following set of tools",
@@ -111,24 +115,26 @@ defmodule Urza.AiAgent do
     ] ++ history
   end
 
-  def build_tool_specs(tool_names) do
-    tool_names
-    |> Enum.map(&Toolset.get/1)
-    |> Enum.map(&Toolset.format_tool/1)
-    |> Enum.reduce("", fn l, r -> l <> r end)
-  end
+  def system_prompt(tools) do
+    specs =
+      tools
+      |> Enum.map(&Toolset.get/1)
+      |> Enum.map(&Toolset.format_tool/1)
+      |> Enum.reduce("", fn l, r -> l <> r end)
 
-  def system_prompt() do
     """
     You are an AI assistant. Your goal is to help the user by calling tools.
     You can call one tool at a time.
     to call a tool you must give a JSON format such as
     ```json
-    {"tool": "calculator","args": {"o": "add","l": 3,"r": 5}}
+    {"tool": "tool_name","args": {"tool_arg_a": "data_a","tool_arg_b": "data_b"...}}
     ```
     When you have the final answer, you must respond with a JSON format such as
     ```json
     {"answer": "your answer"}
+
+    You have access to the following tools
+    #{specs}
     ```
     """
   end

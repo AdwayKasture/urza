@@ -4,9 +4,7 @@ Welcome to Urza, a powerful, scalable workflow engine built with Elixir and powe
 
 ## Core Concept
 
-Urza treats workflows as code. A workflow is a simple Elixir map that defines a series of jobs, their dependencies, and how data flows between them. This approach makes workflows easy to create.
-
-At its heart, Urza leverages the power of Elixir's BEAM VM for massive concurrency and Oban for reliable, distributed background job processing.
+Urza treats workflows as code. A workflow is a simple Elixir map that defines a series of jobs, their dependencies, and how data flows between them. This approach makes workflows easy to create, version, and manage.
 
 ```elixir
 %{ 
@@ -23,44 +21,18 @@ At its heart, Urza leverages the power of Elixir's BEAM VM for massive concurren
 
 ### Workflow as Code
 
-Workflows are defined in simple Elixir maps, making them easy to read, write,with potential for JSON interop.
+Workflows are defined in simple Elixir maps, making them easy to read, write, and version control.
 
 ### Concurrent Execution (Fan-out/Fan-in)
 
 Urza can run multiple jobs concurrently (fan-out) and then aggregate their results for a subsequent job (fan-in). This is achieved by defining dependencies between jobs.
 
-**Diagram: Fan-out / Fan-in**
-```
-          /--> Job B --\ 
-Job A ---               ---> Job D
-          \--> Job C --/
-```
-
-```elixir
-    %{
-        tool: A,
-        args: %{},
-        ref: "$A"
-        deps: []
-    },
-    %{
-        tool: B,
-        args: %{},
-        ref: "$B"
-        deps: ["$A"]
-    },
-    %{
-        tool: C,
-        args: %{},
-        ref: "$C"
-        deps: ["$A"]
-    },
-    %{
-        tool: D,
-        args: %{},
-        ref: "$D"
-        deps: ["$B","$C"]
-    }
+```mermaid
+graph TD
+    A[Job A] --> B[Job B]
+    A --> C[Job C]
+    B --> D[Job D]
+    C --> D
 ```
 
 ### Dynamic Value Passing
@@ -80,11 +52,10 @@ The output of any job can be dynamically passed as input to any subsequent job. 
 
 Workflows can include conditional logic. The `Branch` tool allows a workflow to take different paths based on a given condition, enabling dynamic and flexible execution flows.
 
-**Diagram: Branching**
-```
-          /--> (true) --> Job B
-Job A --- 
-          \--> (false) --> Job C
+```mermaid
+graph TD
+    A[%{tool: Branch, ...}] -- true --> B[Job B]
+    A -- false --> C[Job C]
 ```
 
 ### Human in the Loop
@@ -97,7 +68,7 @@ Urza can delegate complex, goal-oriented tasks to AI agents. An AI agent is give
 
 ### Resilience (Retries & Backoff)
 
-Built on top of Oban, Urza inherits its powerful reliability features. Jobs can be configured with priorities,dedicated resource queues,introspection, automatic retries, exponential backoff, and a maximum number of attempts, ensuring that transient failures don't derail an entire workflow.
+Built on top of Oban, Urza inherits its powerful reliability features. Jobs can be configured with automatic retries, exponential backoff, and a maximum number of attempts, ensuring that transient failures don't derail an entire workflow.
 
 ---
 
@@ -107,20 +78,18 @@ Built on top of Oban, Urza inherits its powerful reliability features. Jobs can 
 
 Urza's core is a `Workflow` GenServer that manages the state of a workflow. When a job is ready to run, it's inserted into Oban.
 
-**Diagram: Workflow --> Oban**
-```
-+------------+
-| Workflow   | ---(queues ready jobs)--> +------+
-| GenServer  |                           | Oban |
-+------------+                           +------+
-     ^                                      |
-     |                                 (executes job)
-     |                                      |
-     |                                      |
-     |                                      V
-     |                                   +------+
-     +---------------------------------- | Tool |
-                                         +------+
+```mermaid
+sequenceDiagram
+    participant Workflow
+    participant Oban
+    participant Tool
+    participant PubSub
+
+    Workflow->>Oban: insert(%{tool: ..., args: ...})
+    Oban->>Tool: execute(job)
+    Tool-->>Oban: result
+    Oban->>PubSub: publish(result)
+    PubSub-->>Workflow: handle_info(result)
 ```
 
 ### AI Agent Interaction
@@ -134,10 +103,10 @@ sequenceDiagram
     participant LLM
     participant Oban
 
-    MainWorkflow->>AiAgent: Start(goal, tools)
+    MainWorkflow->>AiAgent: Start(%{agent: ..., goal: ...})
     AiAgent->>LLM: What's the next step?
     LLM-->>AiAgent: Execute Tool X
-    AiAgent->>Oban: Queue Tool X
+    AiAgent->>Oban: insert(%{tool: ToolX, ...})
     Oban-->>AiAgent: Result of Tool X
     AiAgent->>LLM: I did X, here's the result.
     LLM-->>AiAgent: Final Answer
