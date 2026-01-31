@@ -72,6 +72,7 @@ defmodule Urza.MixProject do
       {:bandit, "~> 1.5"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:req_llm, "~> 1.0.0"},
+      {:lua, "~> 0.4"},
       {:mox, "~> 1.0", only: :test}
     ]
   end

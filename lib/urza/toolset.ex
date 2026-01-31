@@ -6,6 +6,8 @@ defmodule Urza.Toolset do
       "echo" -> Urza.Tools.Echo
       "calculator" -> Urza.Tools.Calculator
       "wait" -> Urza.Tools.Wait
+      "web" -> Urza.Tools.Web
+      "lua" -> Urza.Tools.Lua
       _ -> raise "Unknown tool: #{name}"
     end
   end

@@ -1,28 +1,9 @@
 defmodule Urza.Tools.Calculator do
-  alias Phoenix.PubSub
+  @moduledoc """
+  A tool for performing basic arithmetic operations.
+  """
 
-  use Oban.Worker,
-    queue: :math,
-    max_attempts: 1,
-    priority: 0
-
-  @behaviour Urza.Tool
-
-  @impl Oban.Worker
-  def perform(%Job{args: args, id: id, meta: meta}) do
-    {:ok, ret} = run(args)
-
-    # Handle both agent context (id key) and workflow context (workflow_id key)
-    topic =
-      case meta do
-        %{"workflow_id" => wf_id} -> wf_id
-        %{"id" => agent_id} -> "agent:#{agent_id}:logs"
-      end
-
-    ref = meta["ref"]
-    PubSub.broadcast(Urza.PubSub, topic, {id, %{ref => ret}})
-    :ok
-  end
+  use Urza.Tools.Base, queue: :math, max_attempts: 1, priority: 0
 
   @impl Urza.Tool
   def name(), do: "calculator"

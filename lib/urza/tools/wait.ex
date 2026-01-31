@@ -1,15 +1,10 @@
 defmodule Urza.Tools.Wait do
-  use Oban.Worker
-  @behaviour Urza.Tool
-  alias Phoenix.PubSub
+  @moduledoc """
+  A tool that waits for a random duration between 1-2 seconds.
+  Useful for testing workflow orchestration.
+  """
 
-  @impl Oban.Worker
-  def perform(%Job{args: args, id: id, meta: %{"workflow_id" => wf, "ref" => ref}}) do
-    {:ok, ret} = run(args)
-    # publish  on id
-    PubSub.broadcast(Urza.PubSub, wf, {id, %{ref => ret}})
-    :ok
-  end
+  use Urza.Tools.Base, queue: :default, max_attempts: 1
 
   @impl Urza.Tool
   def run(_) do

@@ -760,4 +760,98 @@ defmodule Urza.WorkflowTest do
       assert Process.alive?(pid)
     end
   end
+
+  describe "new tools integration" do
+    alias Urza.Tools.{Lua, Web}
+
+    test "executes Lua script in workflow" do
+      workflow_id = "test_lua_#{System.unique_integer()}"
+
+      Phoenix.PubSub.subscribe(Urza.PubSub, workflow_id)
+
+      work = [
+        %{
+          tool: Lua,
+          args: %{
+            "script" => {:const, "return 10 + 20"},
+            "input" => {:const, %{}}
+          },
+          ref: "$lua_result",
+          deps: []
+        }
+      ]
+
+      {:ok, _pid} = Workflow.start_link({workflow_id, work, %{}})
+
+      Process.sleep(100)
+      Oban.drain_queue(queue: :script)
+
+      assert_receive {_job_id, %{"$lua_result" => 30}}, 1000
+    end
+
+    test "executes Lua script with input variables" do
+      workflow_id = "test_lua_input_#{System.unique_integer()}"
+
+      Phoenix.PubSub.subscribe(Urza.PubSub, workflow_id)
+
+      work = [
+        %{
+          tool: Lua,
+          args: %{
+            "script" => {:const, "return x * y"},
+            "input" => {:const, %{"x" => 5, "y" => 6}}
+          },
+          ref: "$lua_result",
+          deps: []
+        }
+      ]
+
+      {:ok, _pid} = Workflow.start_link({workflow_id, work, %{}})
+
+      Process.sleep(100)
+      Oban.drain_queue(queue: :script)
+
+      assert_receive {_job_id, %{"$lua_result" => 30}}, 1000
+    end
+
+    test "Lua tool executes after Calculator in workflow" do
+      workflow_id = "test_lua_after_calc_#{System.unique_integer()}"
+
+      Phoenix.PubSub.subscribe(Urza.PubSub, workflow_id)
+
+      work = [
+        %{
+          tool: Calculator,
+          args: %{
+            "l" => {:const, 100},
+            "r" => {:const, 50},
+            "op" => {:const, "add"}
+          },
+          ref: "$calc_result",
+          deps: []
+        },
+        %{
+          tool: Lua,
+          args: %{
+            "script" => {:const, "return 150 * 2"},
+            "input" => {:const, %{}}
+          },
+          ref: "$lua_result",
+          deps: ["$calc_result"]
+        }
+      ]
+
+      {:ok, _pid} = Workflow.start_link({workflow_id, work, %{}})
+
+      Process.sleep(100)
+      Oban.drain_queue(queue: :math)
+
+      assert_receive {_job_id_1, %{"$calc_result" => 150}}, 1000
+
+      Process.sleep(100)
+      Oban.drain_queue(queue: :script)
+
+      assert_receive {_job_id_2, %{"$lua_result" => 300}}, 1000
+    end
+  end
 end
