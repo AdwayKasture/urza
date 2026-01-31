@@ -71,7 +71,8 @@ defmodule Urza.MixProject do
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:req_llm, "~> 1.0.0-rc.4"}
+      {:req_llm, "~> 1.0.0"},
+      {:mox, "~> 1.0", only: :test}
     ]
   end
 

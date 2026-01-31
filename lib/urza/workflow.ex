@@ -1,7 +1,7 @@
 defmodule Urza.Workflow do
   alias Urza.Tools.{HumanCheckpoint, Calculator, Echo, Wait, Branch}
   alias Urza.Workflow
-  alias Urza.AiAgent
+  alias Urza.AI.Agent
   alias Oban.Job
   alias Phoenix.PubSub
   use GenServer
@@ -46,6 +46,7 @@ defmodule Urza.Workflow do
       executing_agents: [],
       completed_refs: MapSet.new()
     }
+
     # TODO: Persist the initial workflow state here.
     {:ok, state}
   end
@@ -204,7 +205,8 @@ defmodule Urza.Workflow do
 
   defp queue_one_agent(agent, workflow_id, _acc) do
     opts = [
-      name: {:via, Registry, {Urza.WorkflowRegistry, agent.ref}},
+      id: agent.agent,
+      name: {:via, Registry, {Urza.AgentRegistry, agent.agent}},
       workflow_id: workflow_id,
       goal: agent.goal,
       available_tools: agent.tools,
@@ -212,7 +214,7 @@ defmodule Urza.Workflow do
     ]
 
     # reusing the same supervisor for our agents
-    {:ok, _pid} = DynamicSupervisor.start_child(Urza.WorkflowSupervisor, {AiAgent, opts})
+    {:ok, _pid} = DynamicSupervisor.start_child(Urza.WorkflowSupervisor, {Agent, opts})
     agent.ref
   end
 
@@ -335,7 +337,7 @@ defmodule Urza.Workflow do
     }
   end
 
-  def test_branch(id,criteria) do
+  def test_branch(id, criteria) do
     %{
       id: id,
       work: [
@@ -372,7 +374,7 @@ defmodule Urza.Workflow do
         %{
           agent: "007",
           tools: ["calculator", "echo"],
-          goal: "add 33,27 and then divide by then, then print it",
+          goal: "add 33,27 and then divide by 10, then echo it",
           ref: "$agent_007",
           deps: []
         },

@@ -9,7 +9,7 @@ import Config
 
 config :urza, Oban,
   engine: Oban.Engines.Basic,
-  queues: [default: 10,math: 5],
+  queues: [default: 10, math: 5],
   repo: Urza.Repo
 
 config :urza,

@@ -8,7 +8,7 @@ config :urza, Oban, testing: :manual
 # Run `mix help test` for more information.
 config :urza, Urza.Repo,
   username: "postgres",
-  password: "postgres",
+  password: "password",
   hostname: "localhost",
   database: "urza_test#{System.get_env("MIX_TEST_PARTITION")}",
   pool: Ecto.Adapters.SQL.Sandbox,
@@ -36,3 +36,6 @@ config :phoenix, :plug_init_mode, :runtime
 # Enable helpful, but potentially expensive runtime checks
 config :phoenix_live_view,
   enable_expensive_runtime_checks: true
+
+# Configure Mox for LLM mocking
+config :urza, :llm_adapter, Urza.AI.LLMAdapterMock

@@ -69,6 +69,10 @@ config :urza, dev_routes: true
 # Do not include metadata nor timestamps in development logs
 config :logger, :default_formatter, format: "[$level] $message\n"
 
+# Note: For AI Agent functionality, set GOOGLE_API_KEY environment variable
+# or add it to a .env file in the project root.
+# Get your API key from: https://aistudio.google.com/app/apikey
+
 # Set a higher stacktrace during development. Avoid configuring such
 # in production as building large stacktraces may be expensive.
 config :phoenix, :stacktrace_depth, 20

@@ -5,6 +5,8 @@ defmodule Urza.Toolset do
     case name do
       "echo" -> Urza.Tools.Echo
       "calculator" -> Urza.Tools.Calculator
+      "wait" -> Urza.Tools.Wait
+      _ -> raise "Unknown tool: #{name}"
     end
   end
 
