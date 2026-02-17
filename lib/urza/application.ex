@@ -1,38 +1,27 @@
 defmodule Urza.Application do
-  # See https://hexdocs.pm/elixir/Application.html
-  # for more information on OTP Applications
   @moduledoc false
-
   use Application
 
   @impl true
   def start(_type, _args) do
     children = [
-      UrzaWeb.Telemetry,
+      # Database repository
       Urza.Repo,
-      {Registry, keys: :unique, name: Urza.WorkflowRegistry},
+      # Registry for agent process discovery
       {Registry, keys: :unique, name: Urza.AgentRegistry},
+      # Registry for workflow process discovery
+      {Registry, keys: :unique, name: Urza.WorkflowRegistry},
+      # DynamicSupervisor for agent processes
+      Urza.AgentSupervisor,
+      # DynamicSupervisor for workflow processes
       Urza.WorkflowSupervisor,
-      {DNSCluster, query: Application.get_env(:urza, :dns_cluster_query) || :ignore},
-      {Phoenix.PubSub, name: Urza.PubSub},
-      {Oban, Application.fetch_env!(:urza, Oban)},
-      # Start a worker by calling: Urza.Worker.start_link(arg)
-      # {Urza.Worker, arg},
-      # Start to serve requests, typically the last entry
-      UrzaWeb.Endpoint
+      # In-memory persistence adapter
+      Urza.Persistence.ETS,
+      # Oban for background job processing
+      {Oban, Application.get_env(:urza, Oban, [])}
     ]
 
-    # See https://hexdocs.pm/elixir/Supervisor.html
-    # for other strategies and supported options
     opts = [strategy: :one_for_one, name: Urza.Supervisor]
     Supervisor.start_link(children, opts)
-  end
-
-  # Tell Phoenix to update the endpoint configuration
-  # whenever the application is updated.
-  @impl true
-  def config_change(changed, _new, removed) do
-    UrzaWeb.Endpoint.config_change(changed, removed)
-    :ok
   end
 end

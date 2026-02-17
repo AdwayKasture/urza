@@ -1,11 +1,13 @@
 defmodule Urza.Test.Fixtures do
+  @moduledoc """
+  Test fixtures for mocking LLM responses and other test data.
+  """
   alias ReqLLM.{Response, Message, Context}
   alias ReqLLM.Message.ContentPart
 
-  @moduledoc """
-  Test fixtures and helpers for mocking LLM responses.
+  @doc """
+  Creates a mock LLM response with the given text content.
   """
-
   def mock_llm_response(text, usage \\ %{}) do
     mock_message = %Message{
       role: :assistant,
@@ -29,7 +31,24 @@ defmodule Urza.Test.Fixtures do
     }
   end
 
+  @doc """
+  Helper to extract message content from ReqLLM format.
+  """
   def extract_message_content(message) do
     message.content |> Enum.map(& &1.text) |> Enum.join("")
+  end
+
+  @doc """
+  Creates a mock tool call response.
+  """
+  def mock_tool_call(tool_name, args) do
+    ~s({"tool": "#{tool_name}", "args": #{Jason.encode!(args)}})
+  end
+
+  @doc """
+  Creates a mock completion response.
+  """
+  def mock_completion(result) do
+    ~s({"completion": #{Jason.encode!(result)}})
   end
 end

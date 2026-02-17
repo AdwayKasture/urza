@@ -1,154 +1,110 @@
 defmodule Urza.AI.Agent do
   @moduledoc """
-  A generic AI agent that autonomously executes tools to achieve a goal.
-
-  The agent uses an LLM to decide which tools to call and when it has
-  achieved its goal. It supports both successful completion and error reporting.
-
-  ## Return Formats
-
-  When successful, the agent returns:
-  ```json
-  {"answer": "final result", "confidence": 1-10}
-  ```
-
-  When the agent cannot complete the task:
-  ```json
-  {"error": "unable to do task due to ..."}
-  ```
+  Generic AI Agent that takes tools, goals, and args.
+  Implements a ReAct pattern with configurable adapters for persistence and communication.
   """
   use GenServer, restart: :temporary
   alias Urza.Toolset
-  alias Urza.AI.Agent
   alias Urza.AI.LLMAdapter
+  alias Urza.PersistenceAdapter
+  alias Urza.NotificationAdapter
   alias ReqLLM.Context
-  alias Phoenix.PubSub
   require Logger
 
-  @model "google:gemini-2.5-flash"
-
-  defstruct goal: nil,
-            available_tools: [],
+  defstruct available_tools: [],
             history: [],
-            workflow_id: nil,
-            current_tool_ref: nil,
-            ref: nil,
-            args: nil,
+            name: nil,
+            input: nil,
             seq: 0,
+            goal: nil,
+            model: nil,
+            completion_schema: nil,
             thread_id: nil,
-            id: nil
+            workflow_id: nil,
+            ref: nil
 
-  @doc """
-  Starts a new AI agent process.
+  @type t :: %__MODULE__{
+          available_tools: list(String.t()),
+          history: list(),
+          name: String.t(),
+          input: String.t(),
+          seq: non_neg_integer(),
+          goal: String.t(),
+          model: String.t(),
+          completion_schema: keyword(),
+          thread_id: any(),
+          workflow_id: String.t() | nil,
+          ref: String.t() | nil
+        }
 
-  ## Options
+  @default_model "google:gemini-2.5-flash"
 
-  * `:id` - Required. Unique identifier for the agent (used for registry).
-  * `:ref` - Required. Reference string for PubSub notifications.
-  * `:goal` - Required. The goal the agent should achieve.
-  * `:available_tools` - List of tool names the agent can use.
-  * `:workflow_id` - ID of the parent workflow (if any).
-  * `:args` - Additional arguments for the agent.
-  """
   def start_link(opts) do
-    id = opts[:id] || raise "id is required"
-    _ref = opts[:ref] || raise "ref is required"
-
-    GenServer.start_link(__MODULE__, opts, name: {:via, Registry, {Urza.AgentRegistry, id}})
+    name = opts[:name] || raise "name is required"
+    _goal = opts[:goal] || raise "goal is required"
+    GenServer.start_link(__MODULE__, opts, name: {:via, Registry, {Urza.AgentRegistry, name}})
   end
 
-  @doc """
-  Sends a tool result back to the agent.
+  @impl GenServer
+  def init(opts) do
+    send(self(), :start)
+    state = new(opts)
 
-  ## Parameters
+    case PersistenceAdapter.create_thread(state) do
+      {:ok, thread_id} ->
+        state = %{state | thread_id: thread_id}
+        {:ok, state}
 
-  * `id` - The agent's ID.
-  * `result` - The result string from the tool execution.
-  """
-  def send_tool_result(id, result) do
+      {:error, reason} ->
+        Logger.error("Failed to persist initial thread: #{inspect(reason)}")
+        {:stop, reason}
+    end
+  end
+
+  def send_tool_result(name, result) do
     GenServer.cast(
-      {:via, Registry, {Urza.AgentRegistry, id}},
+      {:via, Registry, {Urza.AgentRegistry, name}},
       {:tool_result, result}
     )
   end
 
-  @impl true
-  def init(opts) do
-    PubSub.subscribe(Urza.PubSub, "agent:#{opts[:id]}:logs")
-    send(self(), :start)
-
-    state = new(opts)
-
-    # TODO: Persist the initial agent state here.
-    # This could be done by saving the `state` struct to a database
-    # or ETS table for crash recovery and resume capability.
-    {:ok, state}
-  end
-
-  @impl true
+  @impl GenServer
   def handle_info(:start, state) do
     call_ai(state)
   end
 
-  # Handle tool results from PubSub (Calculator tool broadcasts {job_id, %{ref => result}})
-  @impl true
-  def handle_info({_job_id, ret}, state) when is_map(ret) do
-    case state.current_tool_ref do
-      nil ->
-        {:noreply, state}
-
-      ref ->
-        case Map.fetch(ret, ref) do
-          :error ->
-            {:noreply, state}
-
-          {:ok, result} ->
-            handle_cast({:tool_result, result}, state)
-        end
-    end
-  end
-
-  # Ignore broadcasted status events (ai_thinking, tool_started, tool_completed, etc.)
-  @impl true
-  def handle_info({_event, _agent_id}, state) do
-    {:noreply, state}
-  end
-
-  @impl true
-  def handle_info({_event, _agent_id, _}, state) do
-    {:noreply, state}
-  end
-
-  @impl true
-  def handle_info({_event, _agent_id, _, _}, state) do
-    {:noreply, state}
+  @impl GenServer
+  def handle_call(:get_state, _from, state) do
+    {:reply, state, state}
   end
 
   @impl GenServer
   def handle_cast({:tool_result, result}, state) do
-    broadcast_event(state.id, {:tool_completed, state.id, result})
+    NotificationAdapter.notify(state.name, {:tool_completed, state.name, result})
 
     message_content = "tool returned: #{result}"
     history = state.history ++ [Context.user(message_content)]
     state = %{state | history: history}
 
-    # TODO: Persist the tool result here.
-    # Store the result in the agent's history for replay/resume.
+    PersistenceAdapter.persist_state(state.thread_id, %{
+      name: state.name,
+      input: state.input,
+      status: "running",
+      seq: state.seq,
+      history: state.history,
+      result: nil,
+      error_message: nil
+    })
 
     call_ai(state)
   end
 
   defp call_ai(state) do
-    messages = build_messages(state.goal, state.history, state.available_tools)
+    messages = build_messages(state.history, state.available_tools, state.input, state.goal)
 
-    IO.inspect(@model, label: "LLM MODEL")
-    IO.inspect(state.goal, label: "AGENT GOAL")
-    IO.inspect(state.available_tools, label: "AVAILABLE TOOLS")
-    IO.inspect(messages, label: "MESSAGES")
+    NotificationAdapter.notify(state.name, {:ai_thinking, state.name})
 
-    broadcast_event(state.id, {:ai_thinking, state.id})
-
-    case LLMAdapter.generate_text(@model, messages) do
+    case LLMAdapter.generate_text(state.model, messages) do
       {:ok, resp} ->
         resp
         |> ReqLLM.Response.text()
@@ -163,128 +119,85 @@ defmodule Urza.AI.Agent do
 
           {:error, e} ->
             error_msg = "Failed to parse AI response: #{inspect(e)}"
-            broadcast_event(state.id, {:error, state.id, error_msg})
-
-            # TODO: Persist the error state here.
-            # Record the parse error for debugging and recovery.
-
+            NotificationAdapter.notify(state.name, {:error, state.name, error_msg})
+            PersistenceAdapter.persist_error(state.thread_id, error_msg)
             {:stop, :parse_error, state}
         end
 
       {:error, reason} ->
         error_msg = "LLM API call failed: #{inspect(reason)}"
-        IO.inspect(reason, label: "LLM ERROR")
-        broadcast_event(state.id, {:error, state.id, error_msg})
-
-        # TODO: Persist the error state here.
-        # Record the LLM failure for retry logic.
-
+        NotificationAdapter.notify(state.name, {:error, state.name, error_msg})
+        PersistenceAdapter.persist_error(state.thread_id, error_msg)
         {:stop, :llm_error, state}
     end
   end
 
-  def schedule_tool(
-        %{
-          "answer" => answer,
-          "confidence" => confidence
-        } = response,
-        state
-      )
-      when confidence in 1..10 do
-    Logger.info("Agent #{state.id} completed successfully: #{answer}")
+  def schedule_tool(%{"completion" => completion} = result, state) when is_map(completion) do
+    Logger.info("Agent #{state.name} completed with result: #{inspect(completion)}")
 
-    broadcast_event(state.id, {:agent_completed, state.id, response})
+    PersistenceAdapter.persist_result(state.thread_id, result)
 
-    # Notify parent workflow of completion
-    if state.workflow_id do
+    NotificationAdapter.notify(state.name, {:agent_completed, state.name, result})
+
+    # Notify parent workflow of completion if part of a workflow
+    if state.workflow_id && state.ref do
       GenServer.cast(
         {:via, Registry, {Urza.WorkflowRegistry, state.workflow_id}},
-        {:agent_done, state.ref, answer}
+        {:agent_done, state.ref, result}
       )
     end
-
-    # TODO: Persist the completion here.
-    # Mark the agent as completed with the final answer.
 
     {:stop, :normal, state}
   end
 
-  def schedule_tool(
-        %{
-          "error" => error_message
-        } = _response,
-        state
-      ) do
-    Logger.warning("Agent #{state.id} reported error: #{error_message}")
-
-    broadcast_event(state.id, {:agent_error, state.id, error_message})
-
-    # Notify parent workflow of error
-    if state.workflow_id do
-      GenServer.cast(
-        {:via, Registry, {Urza.WorkflowRegistry, state.workflow_id}},
-        {:agent_error, state.ref, error_message}
-      )
-    end
-
-    # TODO: Persist the error state here.
-    # Record the agent-reported error for analysis.
-
-    {:stop, {:agent_error, error_message}, state}
-  end
-
   def schedule_tool(%{"tool" => tool_name, "args" => args}, state) when is_map(args) do
     seq = state.seq + 1
-    tool_ref = "#{state.id}_tool_#{seq}"
 
-    broadcast_event(state.id, {:tool_started, state.id, tool_name, args})
+    NotificationAdapter.notify(state.name, {:tool_started, state.name, tool_name, args})
 
-    case queue_tool_job(tool_name, args, tool_ref, state.id) do
+    case queue_tool_job(tool_name, args, state.name) do
       :ok ->
         message_content = "executing #{tool_name}"
         history = state.history ++ [Context.user(message_content)]
 
-        # TODO: Persist the tool call here.
-        # Store the tool call details for replay capability.
+        PersistenceAdapter.persist_state(state.thread_id, %{
+          name: state.name,
+          input: state.input,
+          status: "running",
+          seq: state.seq,
+          history: state.history,
+          result: nil,
+          error_message: nil
+        })
 
         state
-        |> Map.put(:current_tool_ref, tool_ref)
         |> Map.put(:history, history)
         |> Map.put(:seq, seq)
 
       {:error, reason} ->
         error_msg = "Failed to queue tool job: #{inspect(reason)}"
-        broadcast_event(state.id, {:error, state.id, error_msg})
-
-        # TODO: Persist the error state here.
-        # Record the tool queue failure.
-
+        NotificationAdapter.notify(state.name, {:error, state.name, error_msg})
+        PersistenceAdapter.persist_error(state.thread_id, error_msg)
         {:stop, :tool_queue_error, state}
     end
   end
 
   def schedule_tool(%{"tool" => tool_name, "args" => args}, state) do
     error_msg = "Invalid tool args for #{tool_name}: expected map, got #{inspect(args)}"
-    broadcast_event(state.id, {:error, state.id, error_msg})
-
-    # TODO: Persist the error state here.
-    # Record the invalid args error.
-
+    NotificationAdapter.notify(state.name, {:error, state.name, error_msg})
+    PersistenceAdapter.persist_error(state.thread_id, error_msg)
     {:stop, :invalid_args, state}
   end
 
   def schedule_tool(invalid_response, state) do
     error_msg = "Invalid AI response format: #{inspect(invalid_response)}"
-    broadcast_event(state.id, {:error, state.id, error_msg})
-
-    # TODO: Persist the error state here.
-    # Record the invalid response format error.
-
+    NotificationAdapter.notify(state.name, {:error, state.name, error_msg})
+    PersistenceAdapter.persist_error(state.thread_id, error_msg)
     {:stop, :invalid_response, state}
   end
 
-  defp queue_tool_job(tool_name, args, tool_ref, agent_id) do
-    meta = %{id: agent_id, ref: tool_ref}
+  defp queue_tool_job(tool_name, args, id) do
+    meta = %{id: id}
 
     try do
       worker = Toolset.get(tool_name)
@@ -303,14 +216,19 @@ defmodule Urza.AI.Agent do
     end
   end
 
-  def build_messages(goal, history, tools) do
+  def build_messages(history, tools, input, goal) do
+    base_prompt = """
+    The input to process is given below:
+    #{input}
+    """
+
     [
-      Context.system(system_prompt(tools)),
-      Context.user(goal)
+      Context.system(system_prompt(tools, goal)),
+      Context.user(base_prompt)
     ] ++ history
   end
 
-  def system_prompt(tools) do
+  def system_prompt(tools, goal) do
     specs =
       tools
       |> Enum.map(&Toolset.get/1)
@@ -318,23 +236,20 @@ defmodule Urza.AI.Agent do
       |> Enum.reduce("", fn l, r -> l <> r end)
 
     """
-    You are an AI assistant that helps users by calling tools.
+    #{goal}
+
     You can call one tool at a time.
     To call a tool you must give a JSON format such as mentioned below.
-    DO NOT explain reasoning, just return the structured output.
+    DO NOT explain reasoning just return the structured output.
 
     ```json
-    {"tool": "tool_name", "args": {"tool_arg_a": "data_a", "tool_arg_b": "data_b", ...}}
+    {"tool": "tool_name","args": {"tool_arg_a": "data_a","tool_arg_b": "data_b"...}}
     ```
 
-    When you have the final answer, you must respond with a JSON format such as:
-    ```json
-    {"answer": "your final answer", "confidence": 1-10}
-    ```
+    When you have completed your task, respond with a completion in JSON format:
 
-    If you are unable to complete the task, respond with:
     ```json
-    {"error": "unable to do task due to ..."}
+    {"completion": {"result": "your final result here", "details": "any additional details"}}
     ```
 
     You have access to the following tools:
@@ -343,16 +258,18 @@ defmodule Urza.AI.Agent do
   end
 
   defp new(opts) do
-    %Agent{
-      id: opts[:id],
-      workflow_id: opts[:workflow_id],
+    %__MODULE__{
+      name: opts[:name],
+      available_tools: opts[:tools] || [],
+      input: opts[:input],
       goal: opts[:goal],
-      ref: opts[:ref],
-      available_tools: opts[:available_tools] || [],
-      args: opts[:args],
+      model: opts[:model] || @default_model,
+      completion_schema: opts[:completion_schema] || [type: :map, required: true],
       history: [],
       seq: 0,
-      thread_id: nil
+      thread_id: nil,
+      workflow_id: opts[:workflow_id],
+      ref: opts[:ref]
     }
   end
 
@@ -368,35 +285,23 @@ defmodule Urza.AI.Agent do
 
   @impl true
   def terminate(reason, state) do
-    case reason do
-      :normal ->
-        Logger.info("Agent #{state.id} terminated normally")
+    if state.thread_id do
+      error_msg =
+        case reason do
+          :shutdown -> "Agent was shut down"
+          {:shutdown, _} -> "Agent was shut down"
+          :normal -> "Agent completed normally"
+          _ -> "GenServer crashed: #{inspect(reason)}"
+        end
 
-      {:agent_error, error_msg} ->
-        Logger.warning("Agent #{state.id} terminated with error: #{error_msg}")
-
-      :shutdown ->
-        Logger.info("Agent #{state.id} shut down")
-
-      {:shutdown, _} ->
-        Logger.info("Agent #{state.id} shut down")
-
-      _ ->
-        error_msg = "GenServer crashed: #{inspect(reason)}"
-        Logger.error("Agent #{state.id} terminated: #{error_msg}")
-
-        # TODO: Persist the crash state here.
-        # Record unexpected termination for debugging.
+      if reason !== :normal do
+        PersistenceAdapter.persist_error(state.thread_id, error_msg)
+        Logger.error("Agent #{state.name} terminated: #{error_msg}")
+      else
+        Logger.info("Agent #{state.name} terminated: #{error_msg}")
+      end
     end
 
     :ok
-  end
-
-  defp broadcast_event(id, event) do
-    Phoenix.PubSub.broadcast(
-      Urza.PubSub,
-      "agent:#{id}:logs",
-      event
-    )
   end
 end

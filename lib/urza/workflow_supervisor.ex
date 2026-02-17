@@ -1,19 +1,43 @@
 defmodule Urza.WorkflowSupervisor do
-  alias Urza.Workflow
+  @moduledoc """
+  DynamicSupervisor for managing workflow processes.
+  """
   use DynamicSupervisor
 
-  def start_link(init_arg) do
-    DynamicSupervisor.start_link(__MODULE__, init_arg, name: __MODULE__)
+  def start_link(opts) do
+    DynamicSupervisor.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
   @impl true
-  def init(_init_arg) do
+  def init(_opts) do
     DynamicSupervisor.init(strategy: :one_for_one)
   end
 
-  # Client function to start a new Urza.Workflow
+  @doc """
+  Starts a new workflow under supervision.
+
+  ## Parameters
+
+  * `id` - Unique identifier for the workflow
+  * `work` - List of work items defining the DAG
+  * `initial_acc` - Optional initial accumulator (default: %{})
+  """
   def start_workflow(id, work, initial_acc \\ %{}) do
-    child_spec = {Workflow, {id, work, initial_acc}}
-    DynamicSupervisor.start_child(__MODULE__, child_spec)
+    spec = {Urza.Workflow, [id: id, work: work, acc: initial_acc]}
+    DynamicSupervisor.start_child(__MODULE__, spec)
+  end
+
+  @doc """
+  Stops a workflow by its PID.
+  """
+  def stop_workflow(pid) do
+    DynamicSupervisor.terminate_child(__MODULE__, pid)
+  end
+
+  @doc """
+  Lists all running workflow processes.
+  """
+  def list_workflows do
+    DynamicSupervisor.which_children(__MODULE__)
   end
 end

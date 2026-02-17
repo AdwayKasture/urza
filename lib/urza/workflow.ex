@@ -1,11 +1,20 @@
 defmodule Urza.Workflow do
-  alias Urza.Tools.{HumanCheckpoint, Calculator, Echo, Wait, Branch}
-  alias Urza.Workflow
-  alias Urza.AI.Agent
+  @moduledoc """
+  A GenServer that manages a directed acyclic graph (DAG) of work items.
+
+  Work items can be either:
+  - Tool jobs (executed via Oban)
+  - Agent jobs (spawned as child processes)
+
+  The workflow tracks dependencies and executes items when their dependencies are met.
+  """
+
+  alias Urza.Workers.Calculator
+  alias Urza.Workers.Echo
   alias Oban.Job
-  alias Phoenix.PubSub
-  use GenServer
   alias Registry
+  use GenServer
+  require Logger
 
   @heartbeat_interval 1000
 
@@ -18,13 +27,27 @@ defmodule Urza.Workflow do
             executing_agents: [],
             completed_refs: MapSet.new()
 
-  def start_link({id, work, acc}) do
-    # Use the :via tuple to register the process using the Registry
-    name = {:via, Registry, {Urza.WorkflowRegistry, id}}
+  @doc """
+  Starts a new workflow process.
 
-    GenServer.start_link(Workflow, %{id: id, work: work, acc: acc}, name: name)
+  ## Options
+
+  * `:id` - Required. Unique identifier for the workflow.
+  * `:work` - Required. List of work items defining the DAG.
+  * `:acc` - Optional. Initial accumulator map (default: %{}).
+  """
+  def start_link(opts) do
+    id = opts[:id] || raise "id is required"
+    work = opts[:work] || []
+    acc = opts[:acc] || %{}
+
+    name = {:via, Registry, {Urza.WorkflowRegistry, id}}
+    GenServer.start_link(__MODULE__, %{id: id, work: work, acc: acc}, name: name)
   end
 
+  @doc """
+  Adds a new job to an existing workflow.
+  """
   def add_job(workflow_id, job_def) do
     GenServer.cast({:via, Registry, {Urza.WorkflowRegistry, workflow_id}}, {:add_job, job_def})
   end
@@ -35,10 +58,9 @@ defmodule Urza.Workflow do
     work = opts[:work]
     initial_acc = Map.get(opts, :acc, %{})
 
-    PubSub.subscribe(Urza.PubSub, id)
     send(self(), :start)
 
-    state = %Workflow{
+    state = %__MODULE__{
       id: id,
       work: work,
       acc: initial_acc,
@@ -47,7 +69,6 @@ defmodule Urza.Workflow do
       completed_refs: MapSet.new()
     }
 
-    # TODO: Persist the initial workflow state here.
     {:ok, state}
   end
 
@@ -56,14 +77,12 @@ defmodule Urza.Workflow do
     work = ctx.work ++ [job]
     ctx = %{ctx | work: work}
     ctx = queue_ready_jobs(ctx)
-    # TODO: Persist the workflow state here after adding a job.
     {:noreply, ctx}
   end
 
-  # For Agent work completetion
   @impl GenServer
   def handle_cast({:agent_done, ref, ret}, ctx) do
-    IO.puts("Agent #{ref} has completed task !!!")
+    Logger.info("Agent #{ref} has completed task")
 
     case Enum.member?(ctx.executing_agents, ref) do
       false ->
@@ -83,10 +102,9 @@ defmodule Urza.Workflow do
             completed_refs: completed_refs
         }
 
-        # TODO: Persist the workflow state here after an agent has finished.
         if Enum.empty?(ctx.executing_jobs) and Enum.empty?(ctx.executing_agents) and
              Enum.empty?(ctx.work) do
-          IO.inspect("completed execution !!!")
+          Logger.info("Workflow #{ctx.id} completed execution")
           {:noreply, ctx}
         else
           ctx = queue_ready_jobs(ctx)
@@ -99,7 +117,6 @@ defmodule Urza.Workflow do
   def handle_info(:start, ctx) do
     schedule_heartbeat()
     ctx = queue_ready_jobs(ctx)
-    # TODO: Persist the workflow state here after starting and queueing ready jobs.
     {:noreply, ctx}
   end
 
@@ -118,21 +135,15 @@ defmodule Urza.Workflow do
         {:noreply, ctx}
 
       {:ok, _job} ->
-        # 2. Update the completed references set.
         completed_refs =
           Enum.reduce(refs, ctx.completed_refs, fn ref, acc -> MapSet.put(acc, ref) end)
 
-        # 3. Clean up the executing jobs map.
         executing_jobs = Map.delete(ctx.executing_jobs, job_id)
-
-        # 4. Update the context (note: no 'acc' update, as this is a flow control job)
         ctx = %{ctx | executing_jobs: executing_jobs, completed_refs: completed_refs}
 
-        # TODO: Persist the workflow state here after a branch tool has finished.
-        # 5. Check for new runnable jobs and continue the workflow.
         if Enum.empty?(ctx.executing_jobs) and Enum.empty?(ctx.executing_agents) and
              Enum.empty?(ctx.work) do
-          IO.inspect("completed execution !!!")
+          Logger.info("Workflow #{ctx.id} completed execution")
           {:noreply, ctx}
         else
           ctx = queue_ready_jobs(ctx)
@@ -141,7 +152,6 @@ defmodule Urza.Workflow do
     end
   end
 
-  # For Tool work completetion
   @impl GenServer
   def handle_info({job_id, ret}, ctx) when is_integer(job_id) do
     case Map.fetch(ctx.executing_jobs, job_id) do
@@ -156,9 +166,9 @@ defmodule Urza.Workflow do
         executing_jobs = Map.delete(ctx.executing_jobs, job_id)
         ctx = %{ctx | acc: acc, executing_jobs: executing_jobs, completed_refs: completed_refs}
 
-        # TODO: Persist the workflow state here after a tool has finished.
-        if Enum.empty?(ctx.executing_jobs) and Enum.empty?(ctx.work) do
-          IO.inspect("completed execution !!!")
+        if Enum.empty?(ctx.executing_jobs) and Enum.empty?(ctx.executing_agents) and
+             Enum.empty?(ctx.work) do
+          Logger.info("Workflow #{ctx.id} completed execution")
           {:noreply, ctx}
         else
           ctx = queue_ready_jobs(ctx)
@@ -168,7 +178,6 @@ defmodule Urza.Workflow do
   end
 
   defp queue_ready_jobs(ctx) do
-    # identify which jobs/agents can be fired
     {runnable, waiting} =
       Enum.split_with(ctx.work, fn job ->
         dependencies_met?(job.deps, ctx.completed_refs)
@@ -205,22 +214,19 @@ defmodule Urza.Workflow do
 
   defp queue_one_agent(agent, workflow_id, _acc) do
     opts = [
-      id: agent.agent,
-      name: {:via, Registry, {Urza.AgentRegistry, agent.agent}},
+      name: agent.agent,
       workflow_id: workflow_id,
       goal: agent.goal,
-      available_tools: agent.tools,
+      tools: agent.tools,
       ref: agent.ref
     ]
 
-    # reusing the same supervisor for our agents
-    {:ok, _pid} = DynamicSupervisor.start_child(Urza.WorkflowSupervisor, {Agent, opts})
+    {:ok, _pid} = Urza.AgentSupervisor.start_agent(opts)
     agent.ref
   end
 
   defp queue_one_job(job, workflow_id, acc) do
     meta = %{workflow_id: workflow_id, ref: job.ref}
-
     deref_args = decode_args(job.args, acc)
 
     job.tool.new(deref_args, meta: meta)
@@ -239,150 +245,102 @@ defmodule Urza.Workflow do
 
   defp schedule_heartbeat(), do: Process.send_after(self(), :heartbeat, @heartbeat_interval)
 
-  def detect_dead_graph(ctx) when is_struct(ctx, Workflow) do
-    runnable =
-      Enum.any?(ctx.work, fn job -> dependencies_met?(job.deps, ctx.completed_refs) end)
+  # Example workflow definitions for testing
 
-    if !runnable and map_size(ctx.executing_jobs) == 0 and map_size(ctx.executing_agents) == 0 and
-         ctx.work != [] do
-      IO.puts("🚨 Dead graph detected! Remaining waiting jobs cannot run: #{inspect(ctx.work)}")
-      exit("Illegal state handle")
-    end
-  end
-
-  @moduledoc """
-  handle ai agent
-
+  @doc """
+  Example workflow demonstrating tool chaining.
+  Calculates: ((5 + 3) * 2) - 4 = 12 and echoes the result
   """
-
-  def test_chaining() do
+  def example_chaining() do
     %{
-      id: "main-workflow",
+      id: "chain-workflow",
       work: [
+        # Step 1: 5 + 3 = 8
         %{
           tool: Calculator,
-          args: %{"l" => {:const, 1}, "r" => {:const, 2}, "op" => {:const, "add"}},
-          ref: "$1",
+          args: %{"a" => {:const, 5}, "b" => {:const, 3}, "op" => {:const, "add"}},
+          ref: "$step1",
+          deps: []
+        },
+        # Step 2: $step1 * 2 = 16
+        %{
+          tool: Calculator,
+          args: %{"a" => {:dyn, "$step1"}, "b" => {:const, 2}, "op" => {:const, "multiply"}},
+          ref: "$step2",
+          deps: ["$step1"]
+        },
+        # Step 3: $step2 - 4 = 12
+        %{
+          tool: Calculator,
+          args: %{"a" => {:dyn, "$step2"}, "b" => {:const, 4}, "op" => {:const, "subtract"}},
+          ref: "$step3",
+          deps: ["$step2"]
+        },
+        # Step 4: Echo the final result
+        %{
+          tool: Echo,
+          args: %{"message" => {:dyn, "$step3"}},
+          ref: nil,
+          deps: ["$step3"]
+        }
+      ]
+    }
+  end
+
+  @doc """
+  Example workflow demonstrating fan-out/fan-in pattern.
+  Calculates: (10 + 20) + (30 + 40) = 100 and echoes the result
+  """
+  def example_fan() do
+    %{
+      id: "fan-workflow",
+      work: [
+        # Fan-out: Two parallel additions
+        %{
+          tool: Calculator,
+          args: %{"a" => {:const, 10}, "b" => {:const, 20}, "op" => {:const, "add"}},
+          ref: "$branch1",
           deps: []
         },
         %{
           tool: Calculator,
-          args: %{"l" => {:const, 1}, "r" => {:const, 2}, "op" => {:const, "add"}},
-          ref: "$2",
+          args: %{"a" => {:const, 30}, "b" => {:const, 40}, "op" => {:const, "add"}},
+          ref: "$branch2",
           deps: []
         },
+        # Fan-in: Combine both results
         %{
           tool: Calculator,
-          args: %{
-            "l" => {:dyn, "$1"},
-            "r" => {:dyn, "$2"},
-            "op" => {:const, "multiply"}
-          },
-          ref: "$3",
-          deps: ["$1", "$2"]
+          args: %{"a" => {:dyn, "$branch1"}, "b" => {:dyn, "$branch2"}, "op" => {:const, "add"}},
+          ref: "$combined",
+          deps: ["$branch1", "$branch2"]
         },
+        # Echo the final result
         %{
           tool: Echo,
-          args: %{"content" => {:dyn, "$3"}},
+          args: %{"message" => {:dyn, "$combined"}},
           ref: nil,
-          deps: ["$3"]
+          deps: ["$combined"]
         }
       ]
     }
   end
 
-  def test_fan() do
+  @doc """
+  Example workflow demonstrating agent integration with calculator and echo.
+  Agent performs: (33 + 45 + 90 + 2) / 10 and prints the result
+  """
+  def example_agent() do
     %{
-      id: "test_fan",
+      id: "agent-workflow",
       work: [
         %{
-          tool: Wait,
-          args: %{},
-          ref: "$1",
-          deps: []
-        },
-        %{
-          tool: Wait,
-          args: %{},
-          ref: "$2",
-          deps: []
-        },
-        %{
-          tool: Echo,
-          args: %{"content" => {:const, "done!!"}},
-          ref: "$3",
-          deps: ["$1", "$2"]
-        }
-      ]
-    }
-  end
-
-  def test_human_checkpoint() do
-    %{
-      id: "human",
-      work: [
-        %{
-          tool: HumanCheckpoint,
-          args: %{"state" => {:const, "pending"}, "message" => {:const, "are you cracked dev ?"}},
-          ref: "$1",
-          deps: []
-        },
-        %{
-          tool: Echo,
-          args: %{"content" => {:dyn, "$1"}},
-          ref: nil,
-          deps: ["$1"]
-        }
-      ]
-    }
-  end
-
-  def test_branch(id, criteria) do
-    %{
-      id: id,
-      work: [
-        %{
-          tool: Branch,
-          args: %{
-            "condition" => {:const, criteria},
-            "true" => {:const, "$1"},
-            "false" => {:const, "$2"}
-          },
-          ref: nil,
-          deps: []
-        },
-        %{
-          tool: Echo,
-          args: %{"content" => {:const, "true case !!"}},
-          ref: nil,
-          deps: ["$1"]
-        },
-        %{
-          tool: Echo,
-          args: %{"content" => {:const, "false case !!"}},
-          ref: nil,
-          deps: ["$2"]
-        }
-      ]
-    }
-  end
-
-  def test_agent() do
-    %{
-      id: "agent",
-      work: [
-        %{
-          agent: "007",
+          agent: "math-agent",
           tools: ["calculator", "echo"],
-          goal: "add 33,27 and then divide by 10, then echo it",
-          ref: "$agent_007",
+          goal:
+            "Calculate (33 + 45 + 90 + 2) / 10 step by step. First add 33 and 45, then add 90 to that result, then add 2, and finally divide by 10. After getting the final result, use the echo tool to print 'The final result is: <result>'",
+          ref: "$agent_result",
           deps: []
-        },
-        %{
-          tool: Echo,
-          args: %{"content" => {:dyn, "$agent_007"}},
-          ref: nil,
-          deps: ["$agent_007"]
         }
       ]
     }
