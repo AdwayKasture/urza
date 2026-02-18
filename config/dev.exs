@@ -1,10 +1,12 @@
 import Config
 
-# Development configuration
+# Development configuration - starts Oban for standalone dev/testing
 config :urza, Oban,
   engine: Oban.Engines.Basic,
   notifier: Oban.Notifiers.Isolated,
   peer: Oban.Peers.Isolated,
+  repo: Urza.Repo,
+  plugins: [Oban.Plugins.Pruner],
   queues: [
     default: 10,
     web: 10

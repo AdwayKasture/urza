@@ -19,8 +19,18 @@ defmodule Urza.MixProject do
   def application do
     [
       extra_applications: [:logger],
-      mod: {Urza.Application, []}
+      mod: application_mod()
     ]
+  end
+
+  # Use DevApplication in dev environment to start Oban + Repo
+  # Production apps should use Urza.Application and start Oban themselves
+  defp application_mod do
+    if Mix.env() == :dev do
+      {Urza.DevApplication, []}
+    else
+      {Urza.Application, []}
+    end
   end
 
   # Run "mix help deps" to learn about dependencies.
