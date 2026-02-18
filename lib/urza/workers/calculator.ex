@@ -1,15 +1,30 @@
 defmodule Urza.Workers.Calculator do
   @moduledoc """
   Tool worker for performing mathematical calculations.
+
+  This module is both an Oban Worker and implements the Urza.Tool behaviour.
+
+  ## Registration
+
+      Urza.Toolset.register_tool(Urza.Workers.Calculator)
+
+  ## Oban Configuration
+
+  Configure the queue in your parent application's Oban config:
+
+      config :my_app, Oban,
+        queues: [
+          default: 10,
+          calculations: 5
+        ]
+
+  By default uses the `:default` queue. Override by changing `queue/0` return value.
   """
+  use Oban.Worker, queue: :default
   @behaviour Urza.Tool
+
   alias Urza.AI.Agent
   require Logger
-
-  use Oban.Worker, queue: :default
-
-
-  defguardp are_numbers(a,b) when is_number(a) and is_number(b)
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: args, meta: %{"id" => id}}) do
@@ -29,23 +44,23 @@ defmodule Urza.Workers.Calculator do
 
   @impl Urza.Tool
   def description() do
-    "This tool performs mathematical calculations. Supports basic arithmetic operations: add, subtract, multiply, divide."
+    "Performs mathematical calculations. Supports basic arithmetic operations: add, subtract, multiply, divide."
   end
 
   @impl Urza.Tool
-  def run(%{"op" => "add", "a" => a, "b" => b}) when are_numbers(a,b) do
+  def run(%{"op" => "add", "a" => a, "b" => b}) when is_number(a) and is_number(b) do
     {:ok, a + b}
   end
 
-  def run(%{"op" => "subtract", "a" => a, "b" => b}) when are_numbers(a,b) do
+  def run(%{"op" => "subtract", "a" => a, "b" => b}) when is_number(a) and is_number(b) do
     {:ok, a - b}
   end
 
-  def run(%{"op" => "multiply", "a" => a, "b" => b}) when are_numbers(a,b) do
+  def run(%{"op" => "multiply", "a" => a, "b" => b}) when is_number(a) and is_number(b) do
     {:ok, a * b}
   end
 
-  def run(%{"op" => "divide", "a" => a, "b" => b}) when are_numbers(a,b) do
+  def run(%{"op" => "divide", "a" => a, "b" => b}) when is_number(a) and is_number(b) do
     if b == 0 do
       {:error, "Division by zero"}
     else
@@ -53,7 +68,7 @@ defmodule Urza.Workers.Calculator do
     end
   end
 
-  def run(%{"op" => op}) when op not in ["add","subtract","multiply","divide"] do
+  def run(%{"op" => op}) when op not in ["add", "subtract", "multiply", "divide"] do
     {:error, "Unsupported operation: #{op}. Must be 'add', 'subtract', 'multiply', or 'divide'."}
   end
 
@@ -86,4 +101,7 @@ defmodule Urza.Workers.Calculator do
   def output_schema() do
     [type: :number, required: true]
   end
+
+  @impl Urza.Tool
+  def queue(), do: :default
 end

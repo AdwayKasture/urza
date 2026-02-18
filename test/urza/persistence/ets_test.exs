@@ -15,7 +15,6 @@ defmodule Urza.Persistence.ETSTest do
       Application.delete_env(:urza, :notification_receiver_pid)
     end)
 
-
     %{pid: pid}
   end
 

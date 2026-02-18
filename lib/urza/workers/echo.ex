@@ -1,12 +1,27 @@
 defmodule Urza.Workers.Echo do
   @moduledoc """
   Tool worker for printing messages to IO.
+
+  This module is both an Oban Worker and implements the Urza.Tool behaviour.
+
+  ## Registration
+
+      Urza.Toolset.register_tool(Urza.Workers.Echo)
+
+  ## Oban Configuration
+
+  Configure the queue in your parent application's Oban config:
+
+      config :my_app, Oban,
+        queues: [default: 10]
+
+  By default uses the `:default` queue.
   """
+  use Oban.Worker, queue: :default
   @behaviour Urza.Tool
+
   alias Urza.AI.Agent
   require Logger
-
-  use Oban.Worker, queue: :default
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: args, meta: %{"id" => id}}) do
@@ -26,7 +41,7 @@ defmodule Urza.Workers.Echo do
 
   @impl Urza.Tool
   def description() do
-    "This tool prints a message to standard output (IO). Useful for displaying results or debugging."
+    "Prints a message to standard output (IO). Useful for displaying results or debugging."
   end
 
   @impl Urza.Tool
@@ -54,4 +69,7 @@ defmodule Urza.Workers.Echo do
   def output_schema() do
     [type: :string, required: true]
   end
+
+  @impl Urza.Tool
+  def queue(), do: :default
 end

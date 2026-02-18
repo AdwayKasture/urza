@@ -19,7 +19,6 @@ config :urza, Urza.Repo,
   stacktrace: true,
   show_sensitive_data_on_connection_error: true
 
-
 config :urza, :persistence_adapter, Urza.Persistence.ETS
 
 config :urza, :notification_adapter, Urza.Notification.IO

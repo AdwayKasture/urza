@@ -19,7 +19,6 @@ defmodule Urza.ScenarioTest do
     :ok
   end
 
-
   @tag :ak
   test "calculator scenario: multiple operations" do
     completion =
@@ -36,6 +35,7 @@ defmodule Urza.ScenarioTest do
           "explanation" => "10 + 5 = 15, then 15 * 2 = 30"
         }
       })
+
     IO.inspect(completion)
 
     assert completion["result"] == "30"

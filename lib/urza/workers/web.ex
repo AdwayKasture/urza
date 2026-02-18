@@ -1,13 +1,31 @@
 defmodule Urza.Workers.Web do
   @moduledoc """
   Tool worker for making HTTP requests.
+
+  This module is both an Oban Worker and implements the Urza.Tool behaviour.
+
+  ## Registration
+
+      Urza.Toolset.register_tool(Urza.Workers.Web)
+
+  ## Oban Configuration
+
+  Configure the queue in your parent application's Oban config:
+
+      config :my_app, Oban,
+        queues: [
+          default: 10,
+          web_requests: 20
+        ]
+
+  By default uses the `:default` queue.
   """
+  use Oban.Worker, queue: :default
   @behaviour Urza.Tool
+
   alias Urza.AI.Agent
   alias Req
   require Logger
-
-  use Oban.Worker, queue: :web
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: args, meta: %{"id" => id}}) do
@@ -28,7 +46,7 @@ defmodule Urza.Workers.Web do
 
   @impl Urza.Tool
   def description() do
-    "This tool performs a simple HTTP GET request to a specified URL and returns the response body."
+    "Performs a simple HTTP GET request to a specified URL and returns the response body."
   end
 
   @impl Urza.Tool
@@ -64,4 +82,7 @@ defmodule Urza.Workers.Web do
   def output_schema() do
     [type: :map, required: true]
   end
+
+  @impl Urza.Tool
+  def queue(), do: :default
 end

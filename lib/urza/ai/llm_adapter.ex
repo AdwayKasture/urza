@@ -17,5 +17,4 @@ defmodule Urza.AI.LLMAdapter do
   defp impl do
     Application.get_env(:urza, :llm_adapter, ReqLLM)
   end
-  
 end

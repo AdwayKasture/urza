@@ -31,7 +31,7 @@ defmodule Urza.AI.AgentTest do
       [system_msg, user_msg] = messages
 
       system_content = extract_message_content(system_msg)
-      user_content = extract_message_content(user_msg)
+      _user_content = extract_message_content(user_msg)
 
       assert String.contains?(system_content, "calculator")
       assert String.contains?(system_content, goal)
@@ -65,7 +65,10 @@ defmodule Urza.AI.AgentTest do
     Agent.send_tool_result(agent_name, "8")
 
     assert_receive {^agent_name, _, {:tool_completed, ^agent_name, "8"}}
-    assert_receive {^agent_name, _, {:agent_completed, ^agent_name, %{"completion" => completion}}}
+
+    assert_receive {^agent_name, _,
+                    {:agent_completed, ^agent_name, %{"completion" => completion}}}
+
     assert completion["result"] == "8"
 
     assert_receive {:DOWN, _ref, :process, ^pid, :normal}, 1000
@@ -89,7 +92,7 @@ defmodule Urza.AI.AgentTest do
       {:ok, mock_llm_response(~s({"tool": "web", "args": {"url": "https://example.com"}}))}
     end)
 
-    expect(LLMAdapterMock, :generate_text, fn @model, messages ->
+    expect(LLMAdapterMock, :generate_text, fn @model, _messages ->
       {:ok,
        mock_llm_response(
          ~s({"completion": {"result": "Example Domain", "content": "This domain is for use in illustrative examples..."}})

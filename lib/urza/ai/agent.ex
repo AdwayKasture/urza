@@ -2,6 +2,46 @@ defmodule Urza.AI.Agent do
   @moduledoc """
   Generic AI Agent that takes tools, goals, and args.
   Implements a ReAct pattern with configurable adapters for persistence and communication.
+
+  ## Oban Integration
+
+  This agent requires Oban to be configured in the parent application. The parent app must:
+
+  1. Add Oban as a dependency
+  2. Configure Oban queues in their config
+  3. Start Oban in their supervision tree
+  4. Register tools using `Urza.Toolset.register_tools/1`
+
+  All tools used by agents MUST be Oban workers that implement the `Urza.Tool` behaviour.
+
+  Example parent app configuration:
+
+      # config/config.exs
+      config :my_app, Oban,
+        repo: MyApp.Repo,
+        plugins: [Oban.Plugins.Pruner],
+        queues: [
+          default: 10,
+          agent_tools: 20
+        ]
+
+      # lib/my_app/application.ex
+      def start(_type, _args) do
+        # Register tools first
+        Urza.Toolset.register_tools([
+          Urza.Workers.Calculator,
+          Urza.Workers.Web,
+          MyApp.Tools.CustomTool
+        ])
+
+        children = [
+          MyApp.Repo,
+          {Oban, Application.fetch_env!(:my_app, Oban)},
+          Urza.Supervisor
+        ]
+
+        Supervisor.start_link(children, strategy: :one_for_one)
+      end
   """
   use GenServer, restart: :temporary
   alias Urza.Toolset
@@ -50,7 +90,9 @@ defmodule Urza.AI.Agent do
     send(self(), :start)
     state = new(opts)
 
-    case PersistenceAdapter.create_thread(state) do
+    state
+    |> PersistenceAdapter.create_thread()
+    |> case do
       {:ok, thread_id} ->
         state = %{state | thread_id: thread_id}
         {:ok, state}
@@ -199,20 +241,58 @@ defmodule Urza.AI.Agent do
   defp queue_tool_job(tool_name, args, id) do
     meta = %{id: id}
 
-    try do
-      worker = Toolset.get(tool_name)
-      job = worker.new(args, meta: meta)
-      Oban.insert(job)
+    with {:ok, tool_module} <- fetch_tool_module(tool_name),
+         {:ok, changeset} <- build_oban_job(tool_module, args, meta),
+         :ok <- insert_oban_job(changeset) do
       :ok
+    else
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp fetch_tool_module(tool_name) do
+    case Toolset.get(tool_name) do
+      nil ->
+        {:error,
+         "Tool '#{tool_name}' is not registered. Call Urza.Toolset.register_tool/1 first."}
+
+      module ->
+        {:ok, module}
+    end
+  end
+
+  defp build_oban_job(tool_module, args, meta) do
+    try do
+      # All tools are Oban workers and have new/2 function
+      changeset = tool_module.new(args, meta: meta)
+      {:ok, changeset}
     rescue
       e ->
-        {:error, e}
+        {:error, "Failed to build Oban job: #{inspect(e)}"}
+    end
+  end
+
+  defp insert_oban_job(changeset) do
+    try do
+      case Oban.insert(changeset) do
+        {:ok, _job} ->
+          :ok
+
+        {:error, changeset} ->
+          {:error, "Oban.insert failed: #{inspect(changeset.errors)}"}
+      end
+    rescue
+      e ->
+        Logger.error("Oban.insert raised exception: #{inspect(e)}")
+        {:error, "Oban.insert failed: #{inspect(e)}"}
     catch
       :throw, e ->
-        {:error, e}
+        Logger.error("Oban.insert threw: #{inspect(e)}")
+        {:error, "Oban.insert threw: #{inspect(e)}"}
 
       :exit, e ->
-        {:error, e}
+        Logger.error("Oban.insert exited: #{inspect(e)}")
+        {:error, "Oban.insert exited: #{inspect(e)}"}
     end
   end
 
@@ -232,6 +312,7 @@ defmodule Urza.AI.Agent do
     specs =
       tools
       |> Enum.map(&Toolset.get/1)
+      |> Enum.reject(&is_nil/1)
       |> Enum.map(&Toolset.format_tool/1)
       |> Enum.reduce("", fn l, r -> l <> r end)
 
