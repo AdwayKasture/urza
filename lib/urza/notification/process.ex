@@ -9,16 +9,38 @@ defmodule Urza.Notification.Process do
   defp receiver_pid, do: Application.get_env(:urza, :notification_receiver_pid)
 
   @impl Urza.NotificationAdapter
-  def notify(agent_id_or_state, event) do
-    agent_name = extract_agent_name(agent_id_or_state)
-    thread_id = extract_thread_id(agent_id_or_state)
-    send(receiver_pid(), {agent_name, thread_id, event})
+  def agent_started(agent_name, thread_id) do
+    send(receiver_pid(), {agent_name, thread_id, :agent_started})
     :ok
   end
 
-  defp extract_agent_name(%{name: name}), do: name
-  defp extract_agent_name(name) when is_binary(name), do: name
+  @impl Urza.NotificationAdapter
+  def tool_started(agent_name, tool_name, args) do
+    send(receiver_pid(), {agent_name, nil, {:tool_started, tool_name, args}})
+    :ok
+  end
 
-  defp extract_thread_id(%{thread_id: thread_id}), do: thread_id
-  defp extract_thread_id(_), do: nil
+  @impl Urza.NotificationAdapter
+  def tool_completed(agent_name, result) do
+    send(receiver_pid(), {agent_name, nil, {:tool_completed, result}})
+    :ok
+  end
+
+  @impl Urza.NotificationAdapter
+  def agent_completed(agent_name, result) do
+    send(receiver_pid(), {agent_name, nil, {:agent_completed, result}})
+    :ok
+  end
+
+  @impl Urza.NotificationAdapter
+  def error(agent_name, error) do
+    send(receiver_pid(), {agent_name, nil, {:error, error}})
+    :ok
+  end
+
+  @impl Urza.NotificationAdapter
+  def terminated(agent_name, reason) do
+    send(receiver_pid(), {agent_name, nil, {:terminated, reason}})
+    :ok
+  end
 end

@@ -95,6 +95,7 @@ defmodule Urza.AI.Agent do
     |> case do
       {:ok, thread_id} ->
         state = %{state | thread_id: thread_id}
+        NotificationAdapter.agent_started(state.name, thread_id)
         {:ok, state}
 
       {:error, reason} ->
@@ -122,8 +123,6 @@ defmodule Urza.AI.Agent do
 
   @impl GenServer
   def handle_cast({:tool_result, result}, state) do
-    NotificationAdapter.notify(state.name, {:tool_completed, state.name, result})
-
     message_content = "tool returned: #{result}"
     history = state.history ++ [Context.user(message_content)]
     state = %{state | history: history}
@@ -138,13 +137,13 @@ defmodule Urza.AI.Agent do
       error_message: nil
     })
 
+    NotificationAdapter.tool_completed(state.name, result)
+
     call_ai(state)
   end
 
   defp call_ai(state) do
     messages = build_messages(state.history, state.available_tools, state.input, state.goal)
-
-    NotificationAdapter.notify(state.name, {:ai_thinking, state.name})
 
     case LLMAdapter.generate_text(state.model, messages) do
       {:ok, resp} ->
@@ -161,15 +160,15 @@ defmodule Urza.AI.Agent do
 
           {:error, e} ->
             error_msg = "Failed to parse AI response: #{inspect(e)}"
-            NotificationAdapter.notify(state.name, {:error, state.name, error_msg})
             PersistenceAdapter.persist_error(state.thread_id, error_msg)
+            NotificationAdapter.error(state.name, error_msg)
             {:stop, :parse_error, state}
         end
 
       {:error, reason} ->
         error_msg = "LLM API call failed: #{inspect(reason)}"
-        NotificationAdapter.notify(state.name, {:error, state.name, error_msg})
         PersistenceAdapter.persist_error(state.thread_id, error_msg)
+        NotificationAdapter.error(state.name, error_msg)
         {:stop, :llm_error, state}
     end
   end
@@ -179,7 +178,7 @@ defmodule Urza.AI.Agent do
 
     PersistenceAdapter.persist_result(state.thread_id, result)
 
-    NotificationAdapter.notify(state.name, {:agent_completed, state.name, result})
+    NotificationAdapter.agent_completed(state.name, result)
 
     # Notify parent workflow of completion if part of a workflow
     if state.workflow_id && state.ref do
@@ -194,8 +193,6 @@ defmodule Urza.AI.Agent do
 
   def schedule_tool(%{"tool" => tool_name, "args" => args}, state) when is_map(args) do
     seq = state.seq + 1
-
-    NotificationAdapter.notify(state.name, {:tool_started, state.name, tool_name, args})
 
     case queue_tool_job(tool_name, args, state.name) do
       :ok ->
@@ -212,29 +209,31 @@ defmodule Urza.AI.Agent do
           error_message: nil
         })
 
+        NotificationAdapter.tool_started(state.name, tool_name, args)
+
         state
         |> Map.put(:history, history)
         |> Map.put(:seq, seq)
 
       {:error, reason} ->
         error_msg = "Failed to queue tool job: #{inspect(reason)}"
-        NotificationAdapter.notify(state.name, {:error, state.name, error_msg})
         PersistenceAdapter.persist_error(state.thread_id, error_msg)
+        NotificationAdapter.error(state.name, error_msg)
         {:stop, :tool_queue_error, state}
     end
   end
 
   def schedule_tool(%{"tool" => tool_name, "args" => args}, state) do
     error_msg = "Invalid tool args for #{tool_name}: expected map, got #{inspect(args)}"
-    NotificationAdapter.notify(state.name, {:error, state.name, error_msg})
     PersistenceAdapter.persist_error(state.thread_id, error_msg)
+    NotificationAdapter.error(state.name, error_msg)
     {:stop, :invalid_args, state}
   end
 
   def schedule_tool(invalid_response, state) do
     error_msg = "Invalid AI response format: #{inspect(invalid_response)}"
-    NotificationAdapter.notify(state.name, {:error, state.name, error_msg})
     PersistenceAdapter.persist_error(state.thread_id, error_msg)
+    NotificationAdapter.error(state.name, error_msg)
     {:stop, :invalid_response, state}
   end
 
@@ -381,6 +380,8 @@ defmodule Urza.AI.Agent do
       else
         Logger.info("Agent #{state.name} terminated: #{error_msg}")
       end
+
+      NotificationAdapter.terminated(state.name, reason)
     end
 
     :ok

@@ -81,9 +81,7 @@ defmodule Urza.Test.ScenarioHelpers do
     end)
 
     # Wait for agent to complete - use notification to get thread_id BEFORE agent terminates
-    assert_receive {^agent_name, _thread_id,
-                    {:agent_completed, ^agent_name, %{"completion" => result}}},
-                   1000
+    assert_receive {^agent_name, _thread_id, {:agent_completed, %{"completion" => result}}}, 1000
 
     assert_receive {:DOWN, _ref, :process, ^pid, :normal}, 1000
 

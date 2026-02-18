@@ -59,15 +59,14 @@ defmodule Urza.AI.AgentTest do
 
     Process.monitor(pid)
 
-    assert_receive {^agent_name, _, {:ai_thinking, ^agent_name}}, 1000
-    assert_receive {^agent_name, _, {:tool_started, ^agent_name, "calculator", _}}, 1000
+    assert_receive {^agent_name, _, :agent_started}, 1000
+    assert_receive {^agent_name, _, {:tool_started, "calculator", _}}, 1000
 
     Agent.send_tool_result(agent_name, "8")
 
-    assert_receive {^agent_name, _, {:tool_completed, ^agent_name, "8"}}
+    assert_receive {^agent_name, _, {:tool_completed, "8"}}
 
-    assert_receive {^agent_name, _,
-                    {:agent_completed, ^agent_name, %{"completion" => completion}}}
+    assert_receive {^agent_name, _, {:agent_completed, %{"completion" => completion}}}
 
     assert completion["result"] == "8"
 
@@ -109,14 +108,14 @@ defmodule Urza.AI.AgentTest do
 
     Process.monitor(pid)
 
-    assert_receive {^agent_name, _, {:ai_thinking, ^agent_name}}, 1000
-    assert_receive {^agent_name, _, {:tool_started, ^agent_name, "web", _}}, 1000
+    assert_receive {^agent_name, _, :agent_started}, 1000
+    assert_receive {^agent_name, _, {:tool_started, "web", _}}, 1000
 
     Agent.send_tool_result(agent_name, "<html><body>Example Domain</body></html>")
 
-    assert_receive {^agent_name, _, {:tool_completed, ^agent_name, _}}
+    assert_receive {^agent_name, _, {:tool_completed, _}}
 
-    assert_receive {^agent_name, _, {:agent_completed, _, _}}
+    assert_receive {^agent_name, _, {:agent_completed, _}}
 
     assert_receive {:DOWN, _ref, :process, ^pid, :normal}, 1000
   end
